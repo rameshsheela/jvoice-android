@@ -43,6 +43,7 @@ import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.Edit
+import androidx.compose.material.icons.filled.Email
 import androidx.compose.material.icons.filled.Info
 import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
@@ -100,6 +101,7 @@ import com.jvoice.core.flags.FeatureFlags
 import com.jvoice.core.flags.flagOptedIn
 import com.jvoice.core.reader.ReaderProfile
 import com.jvoice.news.BuildConfig
+import com.jvoice.news.utils.CONTACT_EMAIL
 import com.jvoice.news.utils.CONTACT_PAGE_URL
 import com.jvoice.news.utils.CONTACT_PHONE
 import com.jvoice.news.utils.CONTACT_PHONE_DISPLAY
@@ -665,6 +667,22 @@ fun ReaderProfileScreen(
                         runCatching {
                             context.startActivity(
                                 Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:$CONTACT_PHONE"))
+                            )
+                        }
+                    }
+                )
+            }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.Email, contentDescription = null) },
+                    headlineContent = { Text("Email us") },
+                    supportingContent = { Text(CONTACT_EMAIL) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_SENDTO, android.net.Uri.parse("mailto:$CONTACT_EMAIL"))
+                                    .putExtra(Intent.EXTRA_SUBJECT, "J Voice app")
                             )
                         }
                     }
