@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Share images are staged under cache/shares and handed out through the
+     FileProvider; nothing else on disk is exposed. -->
+<paths>
+    <cache-path name="shares" path="shares/" />
+</paths>

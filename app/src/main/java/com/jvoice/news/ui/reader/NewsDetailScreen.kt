@@ -47,6 +47,8 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import coil.compose.AsyncImage
+import com.jvoice.news.components.ArticleVideo
+import com.jvoice.news.components.VideoOrPhoto
 import com.jvoice.news.components.BreakingBadge
 import com.jvoice.news.components.CompactNewsCard
 import com.jvoice.news.components.EmptyState
@@ -160,15 +162,25 @@ fun NewsDetailScreen(
                 }
             }
 
+            // The hero: the photo, or the story's first video in its place once
+            // the reader taps play. Any further videos follow in the same frame.
+            val videos = article.videoUrls.filter { it.isNotBlank() }
             item {
-                NewsImage(
-                    url = article.imageUrl,
+                VideoOrPhoto(
+                    videoUrl = videos.firstOrNull(),
+                    imageUrl = article.imageUrl,
                     contentDescription = article.headline.current(),
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(horizontal = 16.dp)
                         .aspectRatio(16f / 9f)
                         .clip(RoundedCornerShape(16.dp))
+                )
+            }
+            items(videos.drop(1), key = { "video:" + it }) { url ->
+                ArticleVideo(
+                    url = url,
+                    modifier = Modifier.padding(start = 16.dp, end = 16.dp, top = 12.dp)
                 )
             }
 

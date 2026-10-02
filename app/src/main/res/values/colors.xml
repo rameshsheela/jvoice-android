@@ -17,4 +17,6 @@
 
     <!-- Kept: the old name is still referenced by themes.xml. -->
     <color name="jv_primary">#DD0B1E</color>
+    <!-- Splash ground: the brand navy. Must match SplashNavy in SplashScreen.kt. -->
+    <color name="jv_splash_background">#0D1F63</color>
 </resources>

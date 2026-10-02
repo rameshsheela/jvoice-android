@@ -22,9 +22,20 @@ object Routes {
     fun comments(articleId: String) = "reader/comments/" + articleId
 
     // reporter
+    /** The signed-in staff member's own profile - any desk role. */
+    const val DESK_PROFILE = "desk/profile"
+
     const val REPORTER_DASHBOARD = "reporter/dashboard"
     const val REPORTER_MY_NEWS = "reporter/my_news"
+    /** My stories opened on one group - a dashboard tile. */
+    const val REPORTER_MY_NEWS_GROUP = "reporter/my_news_group?group={group}"
     const val REPORTER_EDITOR = "reporter/editor?articleId={articleId}"
+    const val REPORTER_STORY = "reporter/story/{articleId}"
+    const val REPORTER_REFERRALS = "reporter/referrals"
+    const val ARG_GROUP = "group"
+
+    fun reporterGroup(group: String) = "reporter/my_news_group?group=" + group
+    fun reporterStory(articleId: String) = "reporter/story/" + articleId
 
     fun reporterCreate() = "reporter/editor?articleId="
     fun reporterEdit(articleId: String) = "reporter/editor?articleId=" + articleId

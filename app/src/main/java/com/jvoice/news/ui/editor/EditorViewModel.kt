@@ -38,7 +38,11 @@ data class ReviewDraft(
     val shortDescription: LocalizedText = LocalizedText.EMPTY,
     val content: LocalizedText = LocalizedText.EMPTY,
     val categoryId: String = "",
-    val tags: List<LocalizedText> = emptyList()
+    val tags: List<LocalizedText> = emptyList(),
+    /** Opens a full article page when tapped - off for stories complete on the card. */
+    val detailEnabled: Boolean = true,
+    /** Send a notification to readers' phones when published. */
+    val notifyReaders: Boolean = true
 ) {
     /** The fields the language tabs report completeness for. */
     val localizedFields: List<LocalizedText>
@@ -112,7 +116,9 @@ class EditorViewModel : ViewModel() {
             shortDescription = article.shortDescription,
             content = article.content,
             categoryId = article.categoryId,
-            tags = article.tags
+            tags = article.tags,
+            detailEnabled = article.detailEnabled,
+            notifyReaders = article.notifyReaders
         )
     }
 
@@ -161,22 +167,36 @@ class EditorViewModel : ViewModel() {
             shortDescription = draft.shortDescription.trimmed(),
             content = draft.content.trimmed(),
             categoryId = draft.categoryId,
-            tags = draft.tags
+            tags = draft.tags,
+            detailEnabled = draft.detailEnabled,
+            notifyReaders = draft.notifyReaders
         )
     }
 
     fun saveEdits() = persistEdits()
 
     /** Approve + publish: the article immediately becomes visible to readers. */
-    fun approveAndPublish() {
+    suspend fun approveAndPublish(): String? {
         persistEdits()
-        NewsRepository.approveArticle(_draft.value.id, publishNow = true)
+        return messageFor(
+            NewsRepository.approveArticle(_draft.value.id, publishNow = true, notifyReaders = _draft.value.notifyReaders),
+            published = true
+        )
     }
 
-    fun approveOnly() {
+    suspend fun approveOnly(): String? {
         persistEdits()
-        NewsRepository.approveArticle(_draft.value.id, publishNow = false)
+        return messageFor(NewsRepository.approveArticle(_draft.value.id, publishNow = false), published = false)
     }
+
+    /** Null when done; otherwise what to tell the editor. */
+    private fun messageFor(result: com.jvoice.core.data.Firestore.WriteResult, published: Boolean): String? =
+        when (result) {
+            is com.jvoice.core.data.Firestore.WriteResult.Saved -> null
+            is com.jvoice.core.data.Firestore.WriteResult.Queued ->
+                "No internet - it will " + (if (published) "publish" else "be approved") + " when the phone is back online"
+            is com.jvoice.core.data.Firestore.WriteResult.Failed -> result.message
+        }
 
 /**
      * Rejection reasons and editor notes are read by the reporter, who may well

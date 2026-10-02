@@ -48,7 +48,9 @@ data class User(
     val location: String = "Hyderabad",
     val avatarUrl: String = "",
     val isActive: Boolean = true,
-    val joinedOn: String = "01 Jan 2025"
+    val joinedOn: String = "01 Jan 2025",
+    /** Sign-in id, also the employee id - `jv01r001`. Empty for older accounts. */
+    val loginId: String = ""
 )
 
 data class Reporter(
@@ -57,7 +59,9 @@ data class Reporter(
     val assignedLocation: String,
     val beat: String = "General",
     val isActive: Boolean = true,
-    val avatarUrl: String = ""
+    val avatarUrl: String = "",
+    /** Sign-in id, also the employee id - `jv01r001`. */
+    val loginId: String = ""
 )
 
 /** Derived, computed live from the repository article list. */
@@ -115,7 +119,19 @@ data class NewsArticle(
     val rejectionReason: LocalizedText? = null,
     val editorNote: LocalizedText? = null,
     val views: Int = 0,
-    val reportCount: Int = 0
+    val reportCount: Int = 0,
+    /** Reader reactions and comment count - moved by readers, see EngagementRepository. */
+    val likes: Int = 0,
+    val dislikes: Int = 0,
+    val comments: Int = 0,
+    /**
+     * Whether the story opens a detail screen. Off for stories that are
+     * complete on the card - a video with a caption, say - where a tap
+     * through would only show the same thing again.
+     */
+    val detailEnabled: Boolean = true,
+    /** Whether publishing the story sends a notification to readers' phones. */
+    val notifyReaders: Boolean = true
 ) {
     /** Cover photo first, then any extras. */
     val allPhotos: List<String>

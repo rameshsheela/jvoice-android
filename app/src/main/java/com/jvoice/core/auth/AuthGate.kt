@@ -89,30 +89,17 @@ object AuthGate {
     }
 
     /**
-     * Signs out.
+     * Signs out of this device only.
      *
-     * **The order is the whole point.** `isLogin = false` is written *before*
-     * `signOut()`, because the database rules only permit a user to write their own
-     * `users/{uid}` node while they are authenticated. Signing out first makes the
-     * write fail silently, leaving the account flagged as still logged in — which
-     * then confuses the desk's session view and defeats the kill-switch.
+     * `isLogin` is deliberately left alone. It used to be cleared here, but it is
+     * the account's on/off switch, read at every launch on every device - so
+     * signing out on one phone (or the website) signed the same account out of
+     * every other device at its next launch. Suspending an account is done by
+     * the staffAccounts function, which also disables the login itself.
      *
-     * Local state is cleared last, and unconditionally: even if the remote write
-     * fails, the session on this device must end.
+     * Local state is cleared last, and unconditionally.
      */
     suspend fun logout() {
-        val uid = runCatching { FirebaseAuth.getInstance().currentUser?.uid }.getOrNull()
-
-        if (uid != null && FirebaseAvailability.isAvailable) {
-            // Awaited rather than fired and forgotten - see the note above. A failure
-            // here must not stop the sign-out, so it is caught and logged.
-            try {
-                usersRef().child(uid).child(KEY_IS_LOGIN).setValue(false).await()
-            } catch (e: Exception) {
-                Log.w(TAG, "Could not clear isLogin on logout: ${e.message}")
-            }
-        }
-
         if (FirebaseAvailability.isAvailable) {
             try {
                 FirebaseAuth.getInstance().signOut()

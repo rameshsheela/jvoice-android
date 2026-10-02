@@ -120,8 +120,13 @@ class AdminViewModel : ViewModel() {
     /** @return false when the category still has articles attached. */
     fun deleteCategory(id: String) = NewsRepository.deleteCategory(id)
 
-    // reporter management
-    fun toggleReporterActive(userId: String) = NewsRepository.toggleReporterActive(userId)
-    fun updateReporterLocation(userId: String, location: String) =
+    // reporter management - each goes through the staffAccounts function
+    suspend fun toggleReporterActive(userId: String) = NewsRepository.toggleReporterActive(userId)
+    suspend fun updateReporterLocation(userId: String, location: String) =
         NewsRepository.updateReporterLocation(userId, location)
+    suspend fun nextReporterId(area: String) = NewsRepository.nextReporterId(area)
+    suspend fun createReporter(area: String, name: String, phone: String, location: String, password: String) =
+        NewsRepository.createReporter(area, name, phone, location, password)
+    suspend fun setReporterPassword(userId: String, password: String) =
+        NewsRepository.setReporterPassword(userId, password)
 }

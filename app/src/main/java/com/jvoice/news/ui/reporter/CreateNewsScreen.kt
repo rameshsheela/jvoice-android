@@ -1,6 +1,15 @@
 package com.jvoice.news.ui.reporter
 
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.PickVisualMediaRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.AssistChip
+import androidx.compose.material3.LinearProgressIndicator
+import androidx.compose.material3.TextButton
+import androidx.compose.ui.platform.LocalContext
+import com.jvoice.core.data.StoryMedia
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -11,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -62,7 +72,8 @@ import com.jvoice.core.i18n.rememberLocalizedFormState
 
 /**
  * Create News / Edit News. Reporters may edit drafts, rejected and sent-back
- * articles; everything is stored in the local mock repository.
+ * articles. Saving waits for J Voice to accept the story and shows why if it
+ * does not, so nothing is closed on a failed save.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -80,9 +91,83 @@ fun CreateNewsScreen(
     // Which language the copy fields below are bound to.
     val formState = rememberLocalizedFormState()
     var confirmSubmit by remember { mutableStateOf(false) }
+    // One save at a time: the button waits for J Voice to accept the story.
+    var saving by remember { mutableStateOf(false) }
+    var translating by remember { mutableStateOf(false) }
+    var confirmTranslate by remember { mutableStateOf(false) }
+    // Uploads in flight, and the overall progress of the one going now.
+    var uploading by remember { mutableStateOf(0) }
+    var uploadProgress by remember { mutableStateOf(0f) }
+    val context = LocalContext.current
+    val busy = saving || uploading > 0
+
+    val otherLanguage = if (formState.language == AppLanguage.TELUGU) AppLanguage.ENGLISH else AppLanguage.TELUGU
+    fun runTranslate() {
+        val from = formState.language
+        translating = true
+        scope.launch {
+            val error = viewModel.translate(from)
+            translating = false
+            if (error == null) {
+                // Show the result straight away so the reporter can correct it.
+                formState.select(otherLanguage)
+                snackbarHostState.showSnackbar(
+                    if (otherLanguage == AppLanguage.TELUGU) "Translated to Telugu - please check it"
+                    else "Translated to English - please check it"
+                )
+            } else {
+                snackbarHostState.showSnackbar(error)
+            }
+        }
+    }
+
+    fun uploadAll(uris: List<android.net.Uri>, folder: String) {
+        if (uris.isEmpty()) return
+        uploading += uris.size
+        scope.launch {
+            val done = mutableListOf<String>()
+            for (uri in uris) {
+                uploadProgress = 0f
+                StoryMedia.upload(context, uri, folder) { uploadProgress = it }
+                    .onSuccess { url -> done += url; if (folder == StoryMedia.VIDEOS) viewModel.addVideo(url) }
+                    .onFailure { snackbarHostState.showSnackbar(it.message ?: "Upload failed") }
+                uploading -= 1
+            }
+            if (folder == StoryMedia.PHOTOS) viewModel.addPhotos(done)
+        }
+    }
+
+    val pickPhotos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia(10)) { uris ->
+        uploadAll(uris, StoryMedia.PHOTOS)
+    }
+    val pickVideo = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
+        if (uri != null) uploadAll(listOf(uri), StoryMedia.VIDEOS)
+    }
 
     LaunchedEffect(articleId) {
         if (articleId.isNullOrBlank()) viewModel.startNewArticle() else viewModel.loadForEdit(articleId)
+        // A story left half-written comes back; say so, and offer a clean start.
+        if (articleId.isNullOrBlank() && viewModel.restoredDraft.value) {
+            val result = snackbarHostState.showSnackbar(
+                message = "Your unsent story is back",
+                actionLabel = "Start new",
+                duration = androidx.compose.material3.SnackbarDuration.Long
+            )
+            if (result == androidx.compose.material3.SnackbarResult.ActionPerformed) viewModel.discardDraft()
+        }
+    }
+
+    if (confirmTranslate) {
+        ConfirmDialog(
+            title = if (otherLanguage == AppLanguage.TELUGU) "Replace the Telugu version?" else "Replace the English version?",
+            message = "The other language already has text. Translating replaces it with a fresh translation.",
+            confirmLabel = "Translate",
+            onConfirm = {
+                confirmTranslate = false
+                runTranslate()
+            },
+            onDismiss = { confirmTranslate = false }
+        )
     }
 
     if (confirmSubmit) {
@@ -92,7 +177,12 @@ fun CreateNewsScreen(
             confirmLabel = "Submit",
             onConfirm = {
                 confirmSubmit = false
-                if (viewModel.save(submit = true)) onDone()
+                saving = true
+                scope.launch {
+                    val error = viewModel.save(submit = true)
+                    saving = false
+                    if (error == null) onDone() else snackbarHostState.showSnackbar(error)
+                }
             },
             onDismiss = { confirmSubmit = false }
         )
@@ -114,23 +204,30 @@ fun CreateNewsScreen(
             Row(
                 Modifier
                     .fillMaxWidth()
+                    .navigationBarsPadding()
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.spacedBy(12.dp)
             ) {
                 OutlinedButton(
+                    enabled = !busy,
                     onClick = {
-                        if (viewModel.save(submit = false)) {
-                            scope.launch { snackbarHostState.showSnackbar("Saved as draft") }
-                            onDone()
-                        } else {
-                            showErrors = true
-                            scope.launch { snackbarHostState.showSnackbar("Add a headline before saving") }
+                        saving = true
+                        scope.launch {
+                            val error = viewModel.save(submit = false)
+                            saving = false
+                            if (error == null) {
+                                onDone()
+                            } else {
+                                showErrors = true
+                                snackbarHostState.showSnackbar(error)
+                            }
                         }
                     },
                     modifier = Modifier.weight(1f)
                 ) { Text("Save Draft") }
 
                 Button(
+                    enabled = !busy,
                     onClick = {
                         showErrors = true
                         if (form.isValid) {
@@ -163,7 +260,28 @@ fun CreateNewsScreen(
             // side they are bound to. Filing in one language is enough - the tab
             // badge shows what is still missing.
             LocalizedFormHeader(state = formState, fields = form.localizedFields)
-            Spacer(Modifier.height(10.dp))
+
+            // Write in one language, then fill the other with one tap.
+            OutlinedButton(
+                enabled = !translating && !busy,
+                onClick = {
+                    val other = listOf(form.headline, form.shortDescription, form.content)
+                        .any { it.rawFor(otherLanguage).isNotBlank() }
+                    if (other) confirmTranslate = true else runTranslate()
+                },
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
+            ) {
+                Text(
+                    when {
+                        translating -> "Translating…"
+                        otherLanguage == AppLanguage.TELUGU -> "🌐 Translate to తెలుగు"
+                        else -> "🌐 Translate to English"
+                    }
+                )
+            }
+            Spacer(Modifier.height(4.dp))
 
             LocalizedOutlinedTextField(
                 value = form.headline,
@@ -172,6 +290,7 @@ fun CreateNewsScreen(
                 label = lt("Headline", "శీర్షిక"),
                 placeholder = lt("Headline in this language", "ఈ భాషలో శీర్షిక రాయండి"),
                 required = true,
+                showError = showErrors,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
             if (showErrors && form.headlineError != null) {
@@ -184,6 +303,7 @@ fun CreateNewsScreen(
                 language = formState.language,
                 label = lt("Short description", "సంక్షిప్త వివరణ"),
                 required = true,
+                showError = showErrors,
                 minLines = 2,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
@@ -197,6 +317,7 @@ fun CreateNewsScreen(
                 language = formState.language,
                 label = lt("Full article", "పూర్తి కథనం"),
                 required = true,
+                showError = showErrors,
                 minLines = 8,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp)
             )
@@ -274,54 +395,114 @@ fun CreateNewsScreen(
             )
 
             HorizontalDivider(Modifier.padding(16.dp))
-            SectionHeader("Image", subtitle = "Paste a demo image URL - no upload service in Module 1")
+            SectionHeader("Photos & videos", subtitle = "Upload from the phone, or paste a YouTube link")
+
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 6.dp),
+                horizontalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                OutlinedButton(
+                    enabled = !saving,
+                    onClick = {
+                        pickPhotos.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly))
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("📷 Add photos") }
+                OutlinedButton(
+                    enabled = !saving,
+                    onClick = {
+                        pickVideo.launch(PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.VideoOnly))
+                    },
+                    modifier = Modifier.weight(1f)
+                ) { Text("🎬 Add video") }
+            }
+
+            if (uploading > 0) {
+                Text(
+                    "Uploading… " + (uploadProgress * 100).toInt() + "%" +
+                        (if (uploading > 1) " (" + uploading + " left)" else ""),
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(horizontal = 16.dp)
+                )
+                LinearProgressIndicator(
+                    progress = { uploadProgress },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 4.dp)
+                )
+            }
+
+            val photos = listOfNotNull(form.imageUrl.ifBlank { null }) +
+                form.photosText.lines().map { it.trim() }.filter { it.isNotBlank() }
+            if (photos.isNotEmpty()) {
+                Row(
+                    Modifier
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 16.dp, vertical = 6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    photos.forEach { url ->
+                        val isCover = url == form.imageUrl
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            NewsImage(
+                                url = url,
+                                contentDescription = if (isCover) "Cover photo" else "Photo",
+                                modifier = Modifier
+                                    .size(width = 150.dp, height = 96.dp)
+                                    .clip(RoundedCornerShape(10.dp))
+                            )
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                if (isCover) {
+                                    Text(
+                                        "★ Cover",
+                                        style = MaterialTheme.typography.labelSmall,
+                                        color = MaterialTheme.colorScheme.primary,
+                                        modifier = Modifier.padding(horizontal = 8.dp)
+                                    )
+                                } else {
+                                    TextButton(onClick = { viewModel.makeCover(url) }) { Text("Make cover") }
+                                }
+                                TextButton(onClick = { viewModel.removePhoto(url) }) { Text("Remove") }
+                            }
+                        }
+                    }
+                }
+            }
+
+            val videos = form.videosText.lines().map { it.trim() }.filter { it.isNotBlank() }
+            videos.forEachIndexed { index, url ->
+                Row(
+                    Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    AssistChip(onClick = {}, label = { Text("🎬 Video " + (index + 1) + " uploaded") })
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = { viewModel.removeVideo(url) }) { Text("Remove") }
+                }
+            }
 
             OutlinedTextField(
-                value = form.imageUrl,
-                onValueChange = { value -> viewModel.updateForm { it.copy(imageUrl = value) } },
-                label = { Text("Image URL") },
+                value = form.youtubeUrl,
+                onValueChange = { value -> viewModel.updateForm { it.copy(youtubeUrl = value) } },
+                label = { Text("YouTube link (optional)") },
+                placeholder = { Text("https://youtu.be/…") },
                 singleLine = true,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-
-            OutlinedTextField(
-                value = form.photosText,
-                onValueChange = { value -> viewModel.updateForm { it.copy(photosText = value) } },
-                label = { Text("More photos (one URL per line)") },
-                placeholder = { Text("Extra stills for this story") },
-                minLines = 2,
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 6.dp)
-            )
-
-            OutlinedTextField(
-                value = form.videosText,
-                onValueChange = { value -> viewModel.updateForm { it.copy(videosText = value) } },
-                label = { Text("Videos (one URL per line)") },
-                placeholder = { Text("Clips shot for this story") },
-                minLines = 2,
+                isError = form.youtubeUrl.isNotBlank() && !isYouTube(form.youtubeUrl),
                 supportingText = {
-                    Text("Photos and videos here become the visual source for an AI Short.")
+                    Text(
+                        if (form.youtubeUrl.isNotBlank() && !isYouTube(form.youtubeUrl))
+                            "Paste the link from YouTube's Share button"
+                        else "Readers see YouTube's thumbnail and open it in YouTube."
+                    )
                 },
                 modifier = Modifier
                     .fillMaxWidth()
                     .padding(horizontal = 16.dp, vertical = 6.dp)
             )
-
-            if (form.imageUrl.isNotBlank()) {
-                NewsImage(
-                    url = form.imageUrl,
-                    contentDescription = "Preview",
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp, vertical = 6.dp)
-                        .aspectRatio(16f / 9f)
-                        .clip(RoundedCornerShape(14.dp))
-                )
-            }
 
             Row(
                 Modifier

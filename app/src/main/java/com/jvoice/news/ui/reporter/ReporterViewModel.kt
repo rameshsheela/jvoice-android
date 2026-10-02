@@ -1,5 +1,8 @@
 package com.jvoice.news.ui.reporter
 
+import com.jvoice.core.data.Firestore
+import com.jvoice.core.data.DraftStore
+import com.jvoice.core.data.StoryMedia
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.jvoice.news.data.model.Category
@@ -53,6 +56,8 @@ data class ArticleForm(
     val imageUrl: String = "",
     val photosText: String = "",
     val videosText: String = "",
+    /** A YouTube link pasted by the reporter - saved as the story's first video. */
+    val youtubeUrl: String = "",
     val tagsText: LocalizedText = LocalizedText.EMPTY,
     val isBreaking: Boolean = false
 ) {
@@ -87,6 +92,11 @@ data class ArticleForm(
             localizedFields.any { it.rawFor(language).isBlank() }
         }
 }
+
+/** youtube.com/watch, youtu.be, /shorts/, /embed/ and /live/ links. */
+fun isYouTube(url: String): Boolean =
+    Regex("^(https?://)?((www|m|music)\\.)?(youtube\\.com/(watch\\?|shorts/|embed/|live/)|youtu\\.be/)\\S+", RegexOption.IGNORE_CASE)
+        .containsMatchIn(url.trim())
 
 class ReporterViewModel : ViewModel() {
 
@@ -147,12 +157,63 @@ class ReporterViewModel : ViewModel() {
     fun articlesWithStatus(status: NewsStatus) = myArticles.value.filter { it.status == status }
 
     // ------------------------------------------------------------------ form
+    /** True when [startNewArticle] brought back a story saved on the phone. */
+    private val _restoredDraft = MutableStateFlow(false)
+    val restoredDraft: StateFlow<Boolean> = _restoredDraft.asStateFlow()
+
     fun startNewArticle() {
-        _form.value = ArticleForm(
+        val fresh = ArticleForm(
             categoryId = NewsRepository.categories.value.firstOrNull { it.isEnabled }?.id ?: "",
-            location = reporterUser?.location ?: "Hyderabad",
-            imageUrl = "https://picsum.photos/seed/new" + System.currentTimeMillis() % 1000 + "/900/600"
+            location = reporterUser?.location ?: "Hyderabad"
         )
+        val saved = DraftStore.load(reporterUser?.id.orEmpty())?.let { fromDraft(it, fresh) }
+        _restoredDraft.value = saved != null
+        _form.value = saved ?: fresh
+    }
+
+    /** The unsent story this reporter was writing, or null. */
+    private fun fromDraft(j: org.json.JSONObject, base: ArticleForm): ArticleForm? {
+        fun lt(key: String) = LocalizedText(en = j.optString(key + "En"), te = j.optString(key + "Te"))
+        val form = base.copy(
+            headline = lt("headline"),
+            shortDescription = lt("shortDescription"),
+            content = lt("content"),
+            tagsText = lt("tags"),
+            categoryId = j.optString("categoryId").ifBlank { base.categoryId },
+            location = j.optString("location").ifBlank { base.location },
+            imageUrl = j.optString("imageUrl"),
+            photosText = j.optString("photosText"),
+            videosText = j.optString("videosText"),
+            youtubeUrl = j.optString("youtubeUrl"),
+            isBreaking = j.optBoolean("isBreaking")
+        )
+        val empty = form.headline.isBlank && form.shortDescription.isBlank && form.content.isBlank &&
+            form.imageUrl.isBlank() && form.videosText.isBlank() && form.youtubeUrl.isBlank()
+        return if (empty) null else form
+    }
+
+    private fun persistDraft(f: ArticleForm) {
+        // Only a new story: an edit of a filed one is already on the server.
+        if (f.id != null) return
+        DraftStore.save(
+            reporterUser?.id.orEmpty(),
+            mapOf(
+                "headlineEn" to f.headline.en, "headlineTe" to f.headline.te,
+                "shortDescriptionEn" to f.shortDescription.en, "shortDescriptionTe" to f.shortDescription.te,
+                "contentEn" to f.content.en, "contentTe" to f.content.te,
+                "tagsEn" to f.tagsText.en, "tagsTe" to f.tagsText.te,
+                "categoryId" to f.categoryId, "location" to f.location,
+                "imageUrl" to f.imageUrl, "photosText" to f.photosText, "videosText" to f.videosText,
+                "youtubeUrl" to f.youtubeUrl, "isBreaking" to f.isBreaking
+            )
+        )
+    }
+
+    /** Throws away the story saved on the phone and starts clean. */
+    fun discardDraft() {
+        DraftStore.clear(reporterUser?.id.orEmpty())
+        _restoredDraft.value = false
+        startNewArticle()
     }
 
     fun loadForEdit(articleId: String) {
@@ -166,7 +227,9 @@ class ReporterViewModel : ViewModel() {
             location = article.location,
             imageUrl = article.imageUrl,
             photosText = article.photoUrls.joinToString("\n"),
-            videosText = article.videoUrls.joinToString("\n"),
+            // A YouTube link has its own box; uploaded clips stay in the list.
+            videosText = article.videoUrls.filterNot(::isYouTube).joinToString("\n"),
+            youtubeUrl = article.videoUrls.firstOrNull(::isYouTube).orEmpty(),
             // Rebuilt per language so each box shows only its own tags.
             tagsText = LocalizedText(
                 en = article.tags.mapNotNull { it.en.ifBlank { null } }.joinToString(", "),
@@ -178,38 +241,131 @@ class ReporterViewModel : ViewModel() {
 
     fun updateForm(transform: (ArticleForm) -> ArticleForm) {
         _form.value = transform(_form.value)
+        persistDraft(_form.value)
     }
 
-    /** @return true when the article was stored. */
-    fun save(submit: Boolean): Boolean {
+    /**
+     * Stores the story and waits for J Voice to accept it.
+     *
+     * @return null when it was saved (or queued to send once the phone is back
+     * online), otherwise the message to show - the form stays open so nothing
+     * typed is lost.
+     */
+    suspend fun save(submit: Boolean): String? {
         val current = _form.value
-        if (submit && !current.isValid) return false
+        if (submit && !current.isValid) return "Please fix the highlighted fields"
         // A draft only needs a headline in one language to be worth keeping.
-        if (!submit && current.headline.isBlank) return false
+        if (!submit && current.headline.isBlank) return "Add a headline before saving"
+        if (current.youtubeUrl.isNotBlank() && !isYouTube(current.youtubeUrl.trim())) {
+            return "That is not a YouTube link - paste the link from YouTube's Share button"
+        }
 
-        val user = reporterUser ?: return false
-        NewsRepository.createOrUpdateArticle(
+        val user = reporterUser ?: return "You are signed out. Sign in again."
+        val result = NewsRepository.createOrUpdateArticle(
             existingId = current.id,
             headline = current.headline.trimmed(),
             shortDescription = current.shortDescription.trimmed(),
             content = current.content.trimmed(),
             categoryId = current.categoryId,
             location = current.location,
-            imageUrl = current.imageUrl.ifBlank {
-                "https://picsum.photos/seed/jv" + System.currentTimeMillis() % 9999 + "/900/600"
-            },
+            imageUrl = current.imageUrl.trim(),
             tags = zipTags(current.tagsText),
             isBreaking = current.isBreaking,
             submit = submit,
             photoUrls = current.photosText.lines().map { it.trim() }.filter { it.isNotBlank() },
-            videoUrls = current.videosText.lines().map { it.trim() }.filter { it.isNotBlank() },
+            videoUrls = listOfNotNull(current.youtubeUrl.trim().ifBlank { null }) +
+                current.videosText.lines().map { it.trim() }.filter { it.isNotBlank() },
             reporterId = user.id,
             reporterName = user.name
         )
-        return true
+        val failed = (result as? Firestore.WriteResult.Failed)?.message
+        // J Voice has it (or has it queued to send): the phone copy is done.
+        if (failed == null && current.id == null) {
+            DraftStore.clear(user.id)
+            _restoredDraft.value = false
+        }
+        return failed
     }
 
     fun deleteDraft(articleId: String) = NewsRepository.deleteDraft(articleId)
+
+    /**
+     * Fills the other language from [from]: headline, short description, the
+     * article and the tags. Overwrites what the other side had - the screen asks
+     * first when there is something to lose.
+     *
+     * @return null on success, otherwise the message to show.
+     */
+    suspend fun translate(from: AppLanguage): String? {
+        val to = if (from == AppLanguage.TELUGU) AppLanguage.ENGLISH else AppLanguage.TELUGU
+        val f = _form.value
+        val source = listOf(f.headline, f.shortDescription, f.content, f.tagsText).map { it.rawFor(from) }
+        if (source.all { it.isBlank() }) return "Write the story first, then translate it"
+        val result = StoryMedia.translate(source, code(from), code(to))
+        val out = result.getOrElse { return it.message ?: "Could not translate" }
+        _form.value = _form.value.let {
+            it.copy(
+                headline = it.headline.with(to, out[0]),
+                shortDescription = it.shortDescription.with(to, out[1]),
+                content = it.content.with(to, out[2]),
+                tagsText = it.tagsText.with(to, out[3])
+            )
+        }
+        persistDraft(_form.value)
+        return null
+    }
+
+    private fun code(language: AppLanguage) = if (language == AppLanguage.TELUGU) "te" else "en"
+
+    /** Adds uploaded photos: the first becomes the cover if there is none yet. */
+    fun addPhotos(urls: List<String>) {
+        if (urls.isEmpty()) return
+        _form.value = _form.value.let { f ->
+            val cover = f.imageUrl.ifBlank { urls.first() }
+            val extra = (f.photosText.lines().map { it.trim() }.filter { it.isNotBlank() } +
+                urls.filter { it != cover }).distinct()
+            f.copy(imageUrl = cover, photosText = extra.joinToString("\n"))
+        }
+        persistDraft(_form.value)
+    }
+
+    fun addVideo(url: String) {
+        _form.value = _form.value.let { f ->
+            val list = f.videosText.lines().map { it.trim() }.filter { it.isNotBlank() } + url
+            f.copy(videosText = list.distinct().joinToString("\n"))
+        }
+        persistDraft(_form.value)
+    }
+
+    /** Removes one photo; removing the cover promotes the next photo to cover. */
+    fun removePhoto(url: String) {
+        _form.value = _form.value.let { f ->
+            val extra = f.photosText.lines().map { it.trim() }.filter { it.isNotBlank() && it != url }
+            if (f.imageUrl == url) {
+                f.copy(imageUrl = extra.firstOrNull().orEmpty(), photosText = extra.drop(1).joinToString("\n"))
+            } else {
+                f.copy(photosText = extra.joinToString("\n"))
+            }
+        }
+        persistDraft(_form.value)
+    }
+
+    fun makeCover(url: String) {
+        _form.value = _form.value.let { f ->
+            if (f.imageUrl == url) return@let f
+            val extra = (listOfNotNull(f.imageUrl.ifBlank { null }) +
+                f.photosText.lines().map { it.trim() }.filter { it.isNotBlank() && it != url })
+            f.copy(imageUrl = url, photosText = extra.joinToString("\n"))
+        }
+        persistDraft(_form.value)
+    }
+
+    fun removeVideo(url: String) {
+        _form.value = _form.value.let { f ->
+            f.copy(videosText = f.videosText.lines().map { it.trim() }.filter { it.isNotBlank() && it != url }.joinToString("\n"))
+        }
+        persistDraft(_form.value)
+    }
 
     fun canEdit(article: NewsArticle) = article.status.isEditableByReporter
 

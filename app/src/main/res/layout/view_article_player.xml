@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ExoPlayer's view for story videos. TextureView, not the default SurfaceView:
+  the feed card is a sheet that tilts in 3D as it turns, and a SurfaceView is
+  a hole punched through the window that no transform reaches, so it would
+  draw black (or on top of everything) mid-turn. A TextureView is composited
+  like any other view and turns with the sheet.
+-->
+<androidx.media3.ui.PlayerView xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    app:surface_type="texture_view"
+    app:use_controller="true"
+    app:show_buffering="when_playing" />

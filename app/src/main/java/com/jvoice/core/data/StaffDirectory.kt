@@ -64,7 +64,8 @@ object StaffDirectory {
                             name = it.name,
                             assignedLocation = it.location,
                             isActive = it.isActive,
-                            avatarUrl = it.avatarUrl
+                            avatarUrl = it.avatarUrl,
+                            loginId = it.loginId
                         )
                     }
             }
@@ -102,7 +103,8 @@ object StaffDirectory {
                 is Boolean -> v
                 else -> v.toString() != "false"
             },
-            joinedOn = snapshot.child("joinedOn").value?.toString() ?: ""
+            joinedOn = snapshot.child("joinedOn").value?.toString() ?: "",
+            loginId = snapshot.child("loginId").value?.toString().orEmpty()
         )
     }
 

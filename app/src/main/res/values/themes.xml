@@ -1,4 +1,17 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <style name="Theme.JVoice" parent="android:Theme.Material.Light.NoActionBar" />
+
+    <!--
+      The launch splash. Android 12+ always draws a system splash before the
+      first frame, and it can only show a small circle-masked icon - not the
+      logo. So it is styled as a plain brand-navy screen with no icon, and
+      hands over at once to the Compose SplashScreen, which paints the same
+      navy and brings the full lockup up on it. To the reader it is one splash.
+    -->
+    <style name="Theme.JVoice.Starting" parent="Theme.SplashScreen">
+        <item name="windowSplashScreenBackground">@color/jv_splash_background</item>
+        <item name="windowSplashScreenAnimatedIcon">@drawable/splash_icon_none</item>
+        <item name="postSplashScreenTheme">@style/Theme.JVoice</item>
+    </style>
 </resources>

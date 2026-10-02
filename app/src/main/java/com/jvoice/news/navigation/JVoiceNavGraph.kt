@@ -11,19 +11,6 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
-import com.jvoice.aishorts.navigation.AIShortRoutes
-import com.jvoice.aishorts.ui.AIScriptScreen
-import com.jvoice.aishorts.ui.AIShortPreviewScreen
-import com.jvoice.aishorts.ui.AIShortViewModel
-import com.jvoice.aishorts.ui.AIShortsDashboardScreen
-import com.jvoice.aishorts.ui.CreateAIShortScreen
-import com.jvoice.aishorts.ui.GenerationProgressScreen
-import com.jvoice.aishorts.ui.GenerationReviewScreen
-import com.jvoice.aishorts.ui.MediaSelectionScreen
-import com.jvoice.aishorts.ui.TemplateManagementScreen
-import com.jvoice.aishorts.ui.TemplateSelectionScreen
-import com.jvoice.aishorts.ui.TrimEditorScreen
-import com.jvoice.aishorts.ui.VoiceSelectionScreen
 import com.jvoice.core.flags.FeatureFlags
 import com.jvoice.core.flags.FlaggedRoute
 import com.jvoice.news.data.model.User
@@ -83,7 +70,68 @@ fun JVoiceNavGraph(
         UserRole.SUPER_ADMIN -> Routes.SUPER_DASHBOARD
     }
 
+    // Every desk screen reaches the profile the same way - the avatar button
+    // in its top bar - without each screen taking a new parameter.
+    androidx.compose.runtime.CompositionLocalProvider(
+        LocalOpenProfile provides { navController.navigate(Routes.DESK_PROFILE) { launchSingleTop = true } },
+        // Staff are readers too: the news feed stays one tap away, and the
+        // reader screens offer the way back to the desk.
+        LocalOpenReaderNews provides { navController.navigate(Routes.READER_HOME) { launchSingleTop = true } },
+        com.jvoice.aishorts.studio.LocalStudioNav provides com.jvoice.aishorts.studio.StudioNav(
+            openMine = { navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.MINE) { launchSingleTop = true } },
+            openCreate = { id -> navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.create(id)) },
+            openReview = { navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.REVIEW) { launchSingleTop = true } }
+        ),
+        LocalBackToDesk provides (
+            if (user.role == UserRole.READER) null
+            else ({ if (!navController.popBackStack(startDestination, false)) navController.navigate(startDestination) })
+        )
+    ) {
     NavHost(navController = navController, startDestination = startDestination) {
+        // AI Shorts on the studio backend (aishorts/studio).
+        composable(com.jvoice.aishorts.studio.StudioRoutes.MINE) {
+            com.jvoice.aishorts.studio.MyAiVideosScreen(
+                onBack = { navController.popBackStack() },
+                onCreate = { navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.create()) },
+                onOpen = { id -> navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.detail(id)) }
+            )
+        }
+        composable(
+            route = com.jvoice.aishorts.studio.StudioRoutes.CREATE,
+            arguments = listOf(navArgument(com.jvoice.aishorts.studio.StudioRoutes.ARG_ARTICLE_ID) { type = NavType.StringType; defaultValue = "" })
+        ) { entry ->
+            com.jvoice.aishorts.studio.CreateShortScreen(
+                articleId = entry.arguments?.getString(com.jvoice.aishorts.studio.StudioRoutes.ARG_ARTICLE_ID)?.ifBlank { null },
+                onBack = { navController.popBackStack() },
+                onDone = { id ->
+                    navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.detail(id)) {
+                        popUpTo(com.jvoice.aishorts.studio.StudioRoutes.CREATE) { inclusive = true }
+                    }
+                }
+            )
+        }
+        composable(
+            route = com.jvoice.aishorts.studio.StudioRoutes.DETAIL,
+            arguments = listOf(navArgument(com.jvoice.aishorts.studio.StudioRoutes.ARG_SHORT_ID) { type = NavType.StringType })
+        ) { entry ->
+            com.jvoice.aishorts.studio.ShortDetailScreen(
+                shortId = entry.arguments?.getString(com.jvoice.aishorts.studio.StudioRoutes.ARG_SHORT_ID).orEmpty(),
+                onBack = { navController.popBackStack() },
+                onRemake = { articleId -> navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.create(articleId.ifBlank { null })) }
+            )
+        }
+        composable(com.jvoice.aishorts.studio.StudioRoutes.REVIEW) {
+            com.jvoice.aishorts.studio.ShortsReviewScreen(
+                onBack = { navController.popBackStack() },
+                onOpen = { id -> navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.detail(id)) }
+            )
+        }
+        composable(Routes.DESK_PROFILE) {
+            com.jvoice.news.ui.profile.DeskProfileScreen(
+                onBack = { navController.popBackStack() },
+                onSignOut = onSignOut
+            )
+        }
         readerGraph(navController, user, isDarkTheme, onToggleTheme, onSignOut)
         // Module 2's Student screens, hosted inside the News NavHost. They keep
         // their own bottom bar — News, Home, Study, Exams, Ranks, Profile — so the
@@ -105,9 +153,18 @@ fun JVoiceNavGraph(
         editorGraph(navController, onSignOut)
         adminGraph(navController, onSignOut)
         superAdminGraph(navController, onSignOut)
-        aiShortsGraph(navController, user, onSignOut)
+    }
     }
 }
+
+/** Opens the reader news feed from a desk screen. */
+val LocalOpenReaderNews = androidx.compose.runtime.staticCompositionLocalOf<(() -> Unit)?> { null }
+
+/** Returns a signed-in staff member from the reader screens to their desk; null for readers. */
+val LocalBackToDesk = androidx.compose.runtime.staticCompositionLocalOf<(() -> Unit)?> { null }
+
+/** Opens the staff profile; null outside the news NavHost. */
+val LocalOpenProfile = androidx.compose.runtime.staticCompositionLocalOf<(() -> Unit)?> { null }
 
 /** Switch between top-level destinations without stacking duplicates. */
 private fun NavHostController.switchTab(route: String) {
@@ -140,12 +197,13 @@ private fun NavGraphBuilder.readerGraph(
             onOpenComments = openComments,
             onOpenSearch = { navController.navigate(Routes.READER_SEARCH) },
             onOpenNotifications = { navController.navigate(Routes.READER_NOTIFICATIONS) },
-            onOpenClassicFeed = { navController.navigate(Routes.READER_FEED) },
+            onOpenProfile = { navController.navigate(Routes.READER_PROFILE) },
             bottomBar = { ReaderBar(navController, vm) }
         )
     }
 
-    // The original sectioned feed, still available from the News top bar.
+    // The original sectioned feed. No longer linked from the toolbar, which
+    // is search and notifications only; the route stays for deep links.
     composable(Routes.READER_FEED) {
         val vm: ReaderViewModel = viewModel()
         ReaderHomeScreen(
@@ -167,6 +225,7 @@ private fun NavGraphBuilder.readerGraph(
     composable(Routes.READER_CLIPS) {
         FlaggedRoute(
             key = FeatureFlags.Keys.SHORTS_TAB,
+            optIn = true,
             onBlocked = {
                 navController.navigate(Routes.READER_HOME) {
                     popUpTo(Routes.READER_CLIPS) { inclusive = true }
@@ -197,6 +256,7 @@ private fun NavGraphBuilder.readerGraph(
         ReaderSavedScreen(
             viewModel = vm,
             onOpenArticle = openArticle,
+            onBack = { navController.popBackStack() },
             bottomBar = { ReaderBar(navController, vm) }
         )
     }
@@ -206,10 +266,13 @@ private fun NavGraphBuilder.readerGraph(
         ReaderNotificationsScreen(
             viewModel = vm,
             onOpenArticle = openArticle,
+            onBack = { navController.popBackStack() },
             bottomBar = { ReaderBar(navController, vm) }
         )
     }
 
+    // Reached from the toolbar, not a tab, so it is a pushed screen with a
+    // Back arrow and no pill bar.
     composable(Routes.READER_PROFILE) {
         val vm: ReaderViewModel = viewModel()
         ReaderProfileScreen(
@@ -218,10 +281,10 @@ private fun NavGraphBuilder.readerGraph(
             isDarkTheme = isDarkTheme,
             onToggleTheme = onToggleTheme,
             onSignOut = onSignOut,
+            onBack = { navController.popBackStack() },
             onOpenSaved = { navController.navigate(Routes.READER_SAVED) },
             onOpenCategories = { navController.navigate(Routes.READER_CATEGORIES) },
-            onOpenNotifications = { navController.navigate(Routes.READER_NOTIFICATIONS) },
-            bottomBar = { ReaderBar(navController, vm) }
+            onOpenNotifications = { navController.navigate(Routes.READER_NOTIFICATIONS) }
         )
     }
 
@@ -277,10 +340,8 @@ private fun NavGraphBuilder.readerGraph(
 @Composable
 private fun ReaderBar(navController: NavHostController, viewModel: ReaderViewModel) {
     val backStackEntry by navController.currentBackStackEntryAsState()
-    val unread by viewModel.unreadCount.collectAsState()
     ReaderBottomBar(
         currentRoute = backStackEntry?.destination?.route,
-        unreadCount = unread,
         onNavigate = { route -> navController.switchTab(route) }
     )
 }
@@ -312,7 +373,10 @@ private fun NavGraphBuilder.reporterGraph(
             onCreateNews = { navController.navigate(Routes.reporterCreate()) },
             onOpenMyNews = { navController.navigate(Routes.REPORTER_MY_NEWS) },
             onEditArticle = { id -> navController.navigate(Routes.reporterEdit(id)) },
-            onSignOut = onSignOut
+            onSignOut = onSignOut,
+            onOpenGroup = { group -> navController.navigate(Routes.reporterGroup(group)) },
+            onOpenStory = { id -> navController.navigate(Routes.reporterStory(id)) },
+            onOpenReferrals = { navController.navigate(Routes.REPORTER_REFERRALS) }
         )
     }
 
@@ -321,8 +385,46 @@ private fun NavGraphBuilder.reporterGraph(
         MyNewsScreen(
             viewModel = vm,
             onEditArticle = { id -> navController.navigate(Routes.reporterEdit(id)) },
-            onCreateNews = { navController.navigate(Routes.reporterCreate()) }
+            onCreateNews = { navController.navigate(Routes.reporterCreate()) },
+            onOpenStory = { id -> navController.navigate(Routes.reporterStory(id)) }
         )
+    }
+
+    composable(
+        route = Routes.REPORTER_MY_NEWS_GROUP,
+        arguments = listOf(
+            navArgument(Routes.ARG_GROUP) {
+                type = NavType.StringType
+                defaultValue = ""
+            }
+        )
+    ) { entry ->
+        val vm: ReporterViewModel = viewModel()
+        MyNewsScreen(
+            viewModel = vm,
+            onEditArticle = { id -> navController.navigate(Routes.reporterEdit(id)) },
+            onCreateNews = { navController.navigate(Routes.reporterCreate()) },
+            initialGroup = entry.arguments?.getString(Routes.ARG_GROUP),
+            onOpenStory = { id -> navController.navigate(Routes.reporterStory(id)) },
+            onBack = { navController.popBackStack() }
+        )
+    }
+
+    composable(
+        route = Routes.REPORTER_STORY,
+        arguments = listOf(navArgument(Routes.ARG_ARTICLE_ID) { type = NavType.StringType })
+    ) { entry ->
+        val vm: ReporterViewModel = viewModel()
+        com.jvoice.news.ui.reporter.ReporterStoryDetailScreen(
+            viewModel = vm,
+            articleId = entry.arguments?.getString(Routes.ARG_ARTICLE_ID).orEmpty(),
+            onBack = { navController.popBackStack() },
+            onEdit = { id -> navController.navigate(Routes.reporterEdit(id)) }
+        )
+    }
+
+    composable(Routes.REPORTER_REFERRALS) {
+        com.jvoice.news.ui.reporter.ReferralsScreen(onBack = { navController.popBackStack() })
     }
 
     composable(
@@ -380,7 +482,7 @@ private fun NavGraphBuilder.editorGraph(
             articleId = entry.arguments?.getString(Routes.ARG_ARTICLE_ID).orEmpty(),
             onDone = { navController.popBackStack() },
             onBack = { navController.popBackStack() },
-            onCreateAIShort = { newsId -> navController.navigate(AIShortRoutes.create(newsId)) }
+            onCreateAIShort = { newsId -> navController.navigate(com.jvoice.aishorts.studio.StudioRoutes.create(newsId)) }
         )
     }
 }
@@ -469,192 +571,6 @@ private fun NavGraphBuilder.superAdminGraph(
             onNavigate = { route -> navController.switchTab(route) },
             onOpenCategories = { navController.navigate(Routes.ADMIN_CATEGORIES) },
             onSignOut = onSignOut
-        )
-    }
-}
-
-/* ---------------------------------------------------------------- ai shorts */
-
-private fun NavGraphBuilder.aiShortsGraph(
-    navController: NavHostController,
-    user: User,
-    onSignOut: () -> Unit
-) {
-    val canApprove = user.role == UserRole.EDITOR ||
-        user.role == UserRole.NEWS_ADMIN ||
-        user.role == UserRole.SUPER_ADMIN
-    val canPublish = user.role == UserRole.NEWS_ADMIN || user.role == UserRole.SUPER_ADMIN
-
-    composable(AIShortRoutes.DASHBOARD) {
-        val vm: AIShortViewModel = viewModel()
-        AIShortsDashboardScreen(
-            viewModel = vm,
-            role = user.role,
-            onNavigate = { route -> navController.switchTab(route) },
-            onOpenShort = { id -> navController.navigate(AIShortRoutes.preview(id)) },
-            onContinueSetup = { id -> navController.navigate(AIShortRoutes.script(id)) },
-            onSignOut = onSignOut
-        )
-    }
-
-    composable(AIShortRoutes.TEMPLATE_ADMIN) {
-        val vm: AIShortViewModel = viewModel()
-        TemplateManagementScreen(
-            viewModel = vm,
-            role = user.role,
-            onNavigate = { route -> navController.switchTab(route) },
-            onSignOut = onSignOut
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.CREATE,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_NEWS_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        CreateAIShortScreen(
-            viewModel = vm,
-            newsId = entry.arguments?.getString(AIShortRoutes.ARG_NEWS_ID).orEmpty(),
-            createdBy = user.name,
-            onOpenStep = { route -> navController.navigate(route) },
-            onBack = { navController.popBackStack() },
-            routeForScript = { AIShortRoutes.script(it) },
-            routeForTemplate = { AIShortRoutes.template(it) },
-            routeForVoice = { AIShortRoutes.voice(it) },
-            routeForMedia = { AIShortRoutes.media(it) },
-            routeForReview = { AIShortRoutes.review(it) }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.SCRIPT,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        val id = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty()
-        AIScriptScreen(
-            viewModel = vm,
-            shortId = id,
-            onContinue = { navController.navigate(AIShortRoutes.template(id)) },
-            onBack = { navController.popBackStack() }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.TEMPLATE,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        val id = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty()
-        TemplateSelectionScreen(
-            viewModel = vm,
-            shortId = id,
-            onContinue = { navController.navigate(AIShortRoutes.voice(id)) },
-            onBack = { navController.popBackStack() }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.VOICE,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        val id = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty()
-        VoiceSelectionScreen(
-            viewModel = vm,
-            shortId = id,
-            onContinue = { navController.navigate(AIShortRoutes.media(id)) },
-            onBack = { navController.popBackStack() }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.MEDIA,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        val id = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty()
-        MediaSelectionScreen(
-            viewModel = vm,
-            shortId = id,
-            onContinue = { navController.navigate(AIShortRoutes.review(id)) },
-            onTrim = { sceneId -> navController.navigate(AIShortRoutes.trim(id, sceneId)) },
-            onBack = { navController.popBackStack() }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.REVIEW,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        val id = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty()
-        GenerationReviewScreen(
-            viewModel = vm,
-            shortId = id,
-            onGenerate = { navController.navigate(AIShortRoutes.progress(id)) },
-            onOpenStep = { route -> navController.navigate(route) },
-            onBack = { navController.popBackStack() },
-            routeForScript = { AIShortRoutes.script(it) },
-            routeForTemplate = { AIShortRoutes.template(it) },
-            routeForVoice = { AIShortRoutes.voice(it) },
-            routeForMedia = { AIShortRoutes.media(it) }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.PROGRESS,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        val id = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty()
-        GenerationProgressScreen(
-            viewModel = vm,
-            shortId = id,
-            onFinished = {
-                navController.navigate(AIShortRoutes.preview(id)) {
-                    popUpTo(AIShortRoutes.PROGRESS) { inclusive = true }
-                }
-            },
-            onBack = { navController.popBackStack() }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.TRIM,
-        arguments = listOf(
-            navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType },
-            navArgument(AIShortRoutes.ARG_SCENE_ID) { type = NavType.StringType }
-        )
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        TrimEditorScreen(
-            viewModel = vm,
-            shortId = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty(),
-            sceneId = entry.arguments?.getString(AIShortRoutes.ARG_SCENE_ID).orEmpty(),
-            onDone = { navController.popBackStack() },
-            onBack = { navController.popBackStack() }
-        )
-    }
-
-    composable(
-        route = AIShortRoutes.PREVIEW,
-        arguments = listOf(navArgument(AIShortRoutes.ARG_SHORT_ID) { type = NavType.StringType })
-    ) { entry ->
-        val vm: AIShortViewModel = viewModel()
-        val id = entry.arguments?.getString(AIShortRoutes.ARG_SHORT_ID).orEmpty()
-        AIShortPreviewScreen(
-            viewModel = vm,
-            shortId = id,
-            canApprove = canApprove,
-            canPublish = canPublish,
-            onEditStep = { route -> navController.navigate(route) },
-            onRegenerateScript = { navController.navigate(AIShortRoutes.script(id)) },
-            onBack = { navController.popBackStack() },
-            routeForScript = { AIShortRoutes.script(it) },
-            routeForTemplate = { AIShortRoutes.template(it) },
-            routeForVoice = { AIShortRoutes.voice(it) },
-            routeForMedia = { AIShortRoutes.media(it) }
         )
     }
 }

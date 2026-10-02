@@ -389,28 +389,3 @@ fun PullToRefreshBox(
         }
     }
 }
-
-/* ------------------------------------------------------------------ misc */
-
-@Composable
-fun DemoDisclaimerBar(modifier: Modifier = Modifier) {
-    Surface(
-        modifier = modifier
-            .fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 6.dp)
-            .border(
-                width = 1.dp,
-                color = MaterialTheme.colorScheme.outlineVariant,
-                shape = RoundedCornerShape(10.dp)
-            ),
-        shape = RoundedCornerShape(10.dp),
-        color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-    ) {
-        Text(
-            text = "All content in this build is dummy demo data. No backend, no live news.",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
-        )
-    }
-}

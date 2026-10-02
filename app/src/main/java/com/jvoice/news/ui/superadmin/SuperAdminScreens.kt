@@ -50,7 +50,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.jvoice.news.components.ConfirmDialog
-import com.jvoice.news.components.DemoDisclaimerBar
 import com.jvoice.news.components.EmptyState
 import com.jvoice.news.components.LoadingState
 import com.jvoice.news.components.Pill
@@ -98,7 +97,6 @@ fun SuperAdminDashboardScreen(
                 .padding(padding),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            item { DemoDisclaimerBar() }
             item { SectionHeader("People", subtitle = "వినియోగదారులు") }
             item {
                 StatGrid(
@@ -535,7 +533,6 @@ fun SystemSettingsScreen(
                 .padding(padding),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            item { DemoDisclaimerBar() }
 
             item { SectionHeader("App settings") }
             item {

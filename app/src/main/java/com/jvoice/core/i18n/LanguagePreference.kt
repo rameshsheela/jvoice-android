@@ -2,6 +2,7 @@ package com.jvoice.core.i18n
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.jvoice.core.reader.ReaderProfile
 import androidx.compose.runtime.compositionLocalOf
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -69,6 +70,8 @@ object LanguagePreference {
         if (_language.value == language) return
         _language.value = language
         prefs?.edit()?.putString(KEY_LANGUAGE, language.code)?.apply()
+        // Mirrored to the reader's server record with their name and location.
+        ReaderProfile.onLanguageChanged()
     }
 
     /** Closes the first-run question for good. */

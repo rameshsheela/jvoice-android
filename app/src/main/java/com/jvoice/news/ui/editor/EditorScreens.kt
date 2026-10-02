@@ -17,7 +17,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
-import com.jvoice.news.components.DemoDisclaimerBar
 import com.jvoice.news.components.EmptyState
 import com.jvoice.news.components.LoadingState
 import com.jvoice.news.components.Pill
@@ -72,7 +71,6 @@ fun EditorDashboardScreen(
                 .padding(padding)
         ) {
             LazyColumn(contentPadding = PaddingValues(bottom = 24.dp)) {
-                item { DemoDisclaimerBar() }
                 item { SectionHeader("Today", subtitle = "ఈ రోజు") }
                 item {
                     StatGrid(

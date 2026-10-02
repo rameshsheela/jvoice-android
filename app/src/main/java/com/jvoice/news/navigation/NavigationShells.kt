@@ -12,12 +12,13 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.jvoice.core.flags.FeatureFlags
-import com.jvoice.core.flags.flagEnabled
+import com.jvoice.core.flags.flagOptedIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
 import androidx.compose.material.icons.filled.Bolt
@@ -28,6 +29,7 @@ import androidx.compose.material.icons.filled.Groups
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.automirrored.filled.Logout
 import androidx.compose.material.icons.filled.Menu
+import androidx.compose.material.icons.filled.Newspaper
 import androidx.compose.material.icons.filled.Movie
 import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.Person
@@ -58,6 +60,8 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -66,7 +70,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
-import com.jvoice.aishorts.navigation.AIShortRoutes
 import com.jvoice.news.data.model.UserRole
 import com.jvoice.shell.AppModule
 import com.jvoice.shell.LocalModuleSwitcher
@@ -84,32 +87,42 @@ data class NavItem(
 /* ------------------------------------------------------------------ reader shell */
 
 /**
- * Reader bottom navigation: a floating pill bar with four tabs -
- * News, Clips, Study and Profile. Search lives in the home top bar.
+ * Reader bottom navigation: a floating pill bar with the content tabs - News,
+ * and Clips and Study when they are switched on. Search, notifications and the
+ * profile live in the home top bar.
  *
  * The Study tab crosses into Module 2 as a Student.
  */
 @Composable
 fun ReaderBottomBar(
     currentRoute: String?,
-    unreadCount: Int,
     onNavigate: (String) -> Unit
 ) {
-    // The Clips tab is flagged. Built with buildList rather than a filter over a
-    // fixed list so that when it is off the pill bar lays out as three tabs, not
-    // three tabs in a four-tab-wide gap.
+    // Clips and Study are opt-in: each appears only once an admin has switched
+    // its flag on. Built with buildList rather than a filter over a fixed list
+    // so the pill lays out for the tabs it has, not around gaps.
     val items = buildList {
         add(NavItem(Routes.READER_HOME, "News", Icons.Default.Home))
-        if (flagEnabled(FeatureFlags.Keys.SHORTS_TAB)) {
+        if (flagOptedIn(FeatureFlags.Keys.SHORTS_TAB)) {
             add(NavItem(Routes.READER_CLIPS, "Clips", Icons.Default.Bolt))
         }
-        add(NavItem(StudyRoutes.HOME, "Study", Icons.Default.School))
-        add(NavItem(Routes.READER_PROFILE, "Profile", Icons.Default.Person, unreadCount))
+        if (flagOptedIn(FeatureFlags.Keys.STUDY_TAB)) {
+            add(NavItem(StudyRoutes.HOME, "Study", Icons.Default.School))
+        }
     }
 
+    // A bar with nowhere to go is just a lump on the page. With News alone the
+    // bar is left out entirely and the Scaffold gives the content the space.
+    if (items.size < 2) return
+
+    // The app is edge-to-edge (forced from Android 15 at this targetSdk), and
+    // unlike Material's NavigationBar this hand-built pill claims no insets of
+    // its own - without this padding it draws underneath the system navigation
+    // bar. Gesture navigation gets a slim strip, three-button gets a full bar.
     Box(
         Modifier
             .fillMaxWidth()
+            .navigationBarsPadding()
             .padding(horizontal = 24.dp, vertical = 6.dp),
         contentAlignment = Alignment.Center
     ) {
@@ -194,21 +207,19 @@ private fun drawerItemsFor(role: UserRole): List<NavItem> = when (role) {
         NavItem(Routes.ADMIN_NEWS, "News Management", Icons.AutoMirrored.Filled.Article),
         NavItem(Routes.ADMIN_CATEGORIES, "Categories", Icons.Default.Category),
         NavItem(Routes.ADMIN_REPORTERS, "Reporters", Icons.Default.Groups),
-        NavItem(AIShortRoutes.DASHBOARD, "AI Shorts", Icons.Default.Movie),
-        NavItem(AIShortRoutes.TEMPLATE_ADMIN, "Video Templates", Icons.Default.Dashboard)
+        NavItem(com.jvoice.aishorts.studio.StudioRoutes.REVIEW, "AI Shorts review", Icons.Default.Movie)
     )
     UserRole.SUPER_ADMIN -> listOf(
         NavItem(Routes.SUPER_DASHBOARD, "Dashboard", Icons.Default.Dashboard),
         NavItem(Routes.SUPER_USERS, "User Management", Icons.Default.Groups),
         NavItem(Routes.SUPER_ROLES, "Role Management", Icons.Default.Shield),
         NavItem(Routes.SUPER_SETTINGS, "System Settings", Icons.Default.Settings),
-        NavItem(AIShortRoutes.DASHBOARD, "AI Shorts", Icons.Default.Movie),
-        NavItem(AIShortRoutes.TEMPLATE_ADMIN, "Video Templates", Icons.Default.Dashboard)
+        NavItem(com.jvoice.aishorts.studio.StudioRoutes.REVIEW, "AI Shorts review", Icons.Default.Movie)
     )
     UserRole.EDITOR -> listOf(
         NavItem(Routes.EDITOR_DASHBOARD, "Dashboard", Icons.Default.Dashboard),
         NavItem(Routes.EDITOR_QUEUE, "Review Queue", Icons.AutoMirrored.Filled.Article),
-        NavItem(AIShortRoutes.DASHBOARD, "AI Shorts", Icons.Default.Movie)
+        NavItem(com.jvoice.aishorts.studio.StudioRoutes.REVIEW, "AI Shorts review", Icons.Default.Movie)
     )
     else -> emptyList()
 }
@@ -289,7 +300,7 @@ fun AdminScaffold(
                     )
                 }
                 NavigationDrawerItem(
-                    label = { Text("Switch role") },
+                    label = { Text("Sign out") },
                     icon = { Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null) },
                     selected = false,
                     onClick = {
@@ -310,7 +321,11 @@ fun AdminScaffold(
                             Icon(Icons.Default.Menu, contentDescription = "Open menu")
                         }
                     },
-                    actions = { actions() }
+                    actions = {
+                        actions()
+                        ReadNewsButton()
+                        ProfileButton()
+                    }
                 )
             },
             snackbarHost = { SnackbarHost(snackbarHostState) },
@@ -321,6 +336,26 @@ fun AdminScaffold(
 }
 
 /* ------------------------------------------------------------------ shared bits */
+
+/** Opens the reader news feed - staff read J Voice like everyone else. */
+@Composable
+fun ReadNewsButton() {
+    val open = LocalOpenReaderNews.current ?: return
+    IconButton(onClick = open) {
+        Icon(Icons.Default.Newspaper, contentDescription = "Read news")
+    }
+}
+
+/** The signed-in person's photo (or initials) in the top bar; opens their profile. */
+@Composable
+fun ProfileButton() {
+    val open = LocalOpenProfile.current ?: return
+    val session by com.jvoice.core.auth.SessionStore.session.collectAsState()
+    val desk = session ?: return
+    IconButton(onClick = open) {
+        com.jvoice.news.ui.profile.Avatar(url = desk.avatarUrl, name = desk.name, size = 34)
+    }
+}
 
 @Composable
 fun StatGrid(

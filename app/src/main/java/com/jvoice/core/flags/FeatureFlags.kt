@@ -25,13 +25,21 @@ import kotlinx.coroutines.flow.asStateFlow
  * listener would work too but the session signals already live here, so the app
  * keeps one connection rather than opening a second for four booleans.
  *
- * ## Missing means ON
+ * ## Missing means ON - except for opt-in flags
  *
  * Every flag defaults to `true` when the node is absent or unreadable. That is
  * deliberate and it is the direction that fails safely: a network blip, a deleted
  * node or a typo'd key leaves the app exactly as it shipped, rather than silently
  * stripping the toolbar and the tabs and looking broken. A feature is only ever
  * hidden by an *explicit* `false`.
+ *
+ * The exception is a control that ships *off* and is switched on later, such as
+ * the location picker and the Clips tab: for those the same failure modes must
+ * keep it hidden, so they read through [flagOptedIn], which needs an explicit
+ * `true`. Which way a
+ * flag reads is decided at the call site, not here, because it is a property of
+ * the feature - is it part of the shipped app, or a later addition - rather than
+ * of the storage.
  *
  * The same reasoning as [com.jvoice.core.auth.AuthGate.isEnabled], and the string
  * cases matter for the same reason: the Firebase console writes hand-typed values
@@ -47,17 +55,23 @@ object FeatureFlags {
      * they appear, so moving a control does not orphan its flag.
      */
     object Keys {
-        /** The location picker in the news toolbar. */
+        /** The location picker in the news toolbar. Opt-in: see [flagOptedIn]. */
         const val NEWS_LOCATION_DROPDOWN = "newsLocationDropdown"
 
         /** The row of location filter chips in the swipe feed. */
         const val LOCATION_CHIPS = "locationChips"
 
-        /** The Clips / Shorts tab in the reader's bottom bar. */
+        /** The Clips / Shorts tab in the reader's bottom bar. Opt-in: see [flagOptedIn]. */
         const val SHORTS_TAB = "shortsTab"
 
-        /** The module-switch icon in the toolbar, left of search. */
-        const val MODULE_ICON = "moduleIcon"
+        /** The Study tab in the reader's bottom bar. Opt-in: see [flagOptedIn]. */
+        const val STUDY_TAB = "studyTab"
+
+        /**
+         * The "Staff sign in" entry on the reader's profile. Opt-in: the desk
+         * is not offered from the public app until this is switched on.
+         */
+        const val STAFF_LOGIN = "staffLogin"
     }
 
     /** Current values. Absent keys are simply not present and read as ON. */
@@ -105,6 +119,9 @@ object FeatureFlags {
 
     /** Is [key] on? Unknown keys are on. */
     fun isEnabled(key: String): Boolean = _flags.value[key] ?: true
+
+    /** Has [key] been explicitly switched on? Unknown keys are off. */
+    fun isOptedIn(key: String): Boolean = _flags.value[key] == true
 }
 
 /**
@@ -121,6 +138,15 @@ val LocalFeatureFlags = compositionLocalOf { emptyMap<String, Boolean>() }
 @Composable
 @ReadOnlyComposable
 fun flagEnabled(key: String): Boolean = LocalFeatureFlags.current[key] ?: true
+
+/**
+ * Reads an opt-in flag inside a composable: on only for an explicit `true`.
+ * The mirror image of [flagEnabled], for features that ship hidden - see the
+ * class note on [FeatureFlags].
+ */
+@Composable
+@ReadOnlyComposable
+fun flagOptedIn(key: String): Boolean = LocalFeatureFlags.current[key] == true
 
 /**
  * Puts a whole destination behind a flag, not just the control that opens it.
@@ -144,8 +170,14 @@ fun flagEnabled(key: String): Boolean = LocalFeatureFlags.current[key] ?: true
  * than a decision.
  */
 @Composable
-fun FlaggedRoute(key: String, onBlocked: () -> Unit, content: @Composable () -> Unit) {
-    val enabled = flagEnabled(key)
+fun FlaggedRoute(
+    key: String,
+    onBlocked: () -> Unit,
+    /** Read the flag as opt-in ([flagOptedIn]) rather than fail-open. */
+    optIn: Boolean = false,
+    content: @Composable () -> Unit
+) {
+    val enabled = if (optIn) flagOptedIn(key) else flagEnabled(key)
     LaunchedEffect(enabled) { if (!enabled) onBlocked() }
     if (enabled) content()
 }

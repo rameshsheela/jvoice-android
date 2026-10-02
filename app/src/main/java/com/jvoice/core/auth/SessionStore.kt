@@ -36,6 +36,7 @@ object SessionStore {
     private const val KEY_EMAIL = "email"
     private const val KEY_PHONE = "phone"
     private const val KEY_ROLE = "role"
+    private const val KEY_AVATAR = "avatar_url"
 
     private var prefs: SharedPreferences? = null
 
@@ -55,7 +56,9 @@ object SessionStore {
         val name: String,
         val email: String,
         val phone: String,
-        val role: JvRole
+        val role: JvRole,
+        /** Profile photo, set from the staff profile screen. */
+        val avatarUrl: String = ""
     )
 
     fun init(context: Context) {
@@ -77,8 +80,28 @@ object SessionStore {
             name = store.getString(KEY_NAME, "").orEmpty(),
             email = store.getString(KEY_EMAIL, "").orEmpty(),
             phone = store.getString(KEY_PHONE, "").orEmpty(),
-            role = role
+            role = role,
+            avatarUrl = store.getString(KEY_AVATAR, "").orEmpty()
         )
+    }
+
+    /**
+     * The signed-in person changed their own profile. Only the fields given
+     * change; the rest of the session stays as it is.
+     */
+    fun updateProfile(name: String? = null, phone: String? = null, avatarUrl: String? = null) {
+        val current = _session.value ?: return
+        val next = current.copy(
+            name = name ?: current.name,
+            phone = phone ?: current.phone,
+            avatarUrl = avatarUrl ?: current.avatarUrl
+        )
+        prefs?.edit()
+            ?.putString(KEY_NAME, next.name)
+            ?.putString(KEY_PHONE, next.phone)
+            ?.putString(KEY_AVATAR, next.avatarUrl)
+            ?.apply()
+        _session.value = next
     }
 
     /** Persists a freshly signed-in user. Returns the session it stored. */
@@ -91,7 +114,8 @@ object SessionStore {
             name = user.displayName,
             email = user.email.orEmpty(),
             phone = user.phone.orEmpty(),
-            role = role
+            role = role,
+            avatarUrl = user.avatarUrl.orEmpty()
         )
         prefs?.edit()
             ?.putString(KEY_UID, session.uid)
@@ -100,6 +124,7 @@ object SessionStore {
             ?.putString(KEY_EMAIL, session.email)
             ?.putString(KEY_PHONE, session.phone)
             ?.putString(KEY_ROLE, session.role.code)
+            ?.putString(KEY_AVATAR, session.avatarUrl)
             ?.apply()
         _session.value = session
         return session

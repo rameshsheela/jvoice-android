@@ -13,19 +13,25 @@ import kotlinx.coroutines.flow.asStateFlow
  * SharedPreferences, so read state survives the app being killed. That is the whole
  * point of it: the reader should not be shown the same story again next time.
  *
- * When every story has been read the round is finished and the set is cleared, so
- * the feed loops and there is always something to swipe.
+ * Read stories are not hidden, only *deprioritised*: the feed deals the unread
+ * ones first and the already-read ones after them, so it never runs dry and
+ * never repeats itself while there is something new.
  */
 object ReadStateRepository {
 
     private const val PREFS = "jvoice_read_state"
     private const val KEY_READ = "read_article_ids"
+    private const val KEY_READ_NOTIFICATIONS = "read_notification_ids"
     private const val KEY_ROUND = "round"
 
     private var prefs: SharedPreferences? = null
 
     private val _readIds = MutableStateFlow<Set<String>>(emptySet())
     val readIds: StateFlow<Set<String>> = _readIds.asStateFlow()
+
+    /** Notifications this device has opened. Same reasoning as [readIds]. */
+    private val _readNotificationIds = MutableStateFlow<Set<String>>(emptySet())
+    val readNotificationIds: StateFlow<Set<String>> = _readNotificationIds.asStateFlow()
 
     /** Bumped each time the feed loops; used to rebuild the deck. */
     private val _round = MutableStateFlow(1)
@@ -36,16 +42,31 @@ object ReadStateRepository {
         val store = context.applicationContext.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         prefs = store
         _readIds.value = store.getStringSet(KEY_READ, emptySet())?.toSet() ?: emptySet()
+        _readNotificationIds.value = store.getStringSet(KEY_READ_NOTIFICATIONS, emptySet())?.toSet() ?: emptySet()
         _round.value = store.getInt(KEY_ROUND, 1)
     }
 
     fun isRead(articleId: String): Boolean = _readIds.value.contains(articleId)
 
-    fun markRead(articleId: String) {
-        if (articleId.isBlank() || _readIds.value.contains(articleId)) return
+    /**
+     * Records a read. Returns true only the first time for a story, which is
+     * what the caller uses to count a view once per device.
+     */
+    fun markRead(articleId: String): Boolean {
+        if (articleId.isBlank() || _readIds.value.contains(articleId)) return false
         val updated = _readIds.value + articleId
         _readIds.value = updated
         prefs?.edit()?.putStringSet(KEY_READ, updated)?.apply()
+        return true
+    }
+
+    fun isNotificationRead(id: String): Boolean = _readNotificationIds.value.contains(id)
+
+    fun markNotificationRead(id: String) {
+        if (id.isBlank() || _readNotificationIds.value.contains(id)) return
+        val updated = _readNotificationIds.value + id
+        _readNotificationIds.value = updated
+        prefs?.edit()?.putStringSet(KEY_READ_NOTIFICATIONS, updated)?.apply()
     }
 
     /** True when every id given has been read. */

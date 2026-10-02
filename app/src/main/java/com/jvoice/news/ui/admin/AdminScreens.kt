@@ -56,7 +56,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.jvoice.news.components.ConfirmDialog
-import com.jvoice.news.components.DemoDisclaimerBar
 import com.jvoice.news.components.EmptyState
 import com.jvoice.news.components.LoadingState
 import com.jvoice.news.components.Pill
@@ -73,6 +72,16 @@ import com.jvoice.news.theme.StatusPublished
 import com.jvoice.news.theme.StatusRejected
 import com.jvoice.news.theme.StatusSubmitted
 import kotlinx.coroutines.launch
+import com.jvoice.news.data.model.Reporter
+import com.jvoice.core.data.StaffAccounts
+import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.KeyboardType
+import androidx.compose.ui.text.AnnotatedString
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.text.KeyboardOptions
 import com.jvoice.core.i18n.LocalizedText
 import com.jvoice.core.i18n.ContentLanguageTabs
 import com.jvoice.core.i18n.LocalizedOutlinedTextField
@@ -113,7 +122,6 @@ fun AdminDashboardScreen(
                 .padding(padding),
             contentPadding = PaddingValues(bottom = 24.dp)
         ) {
-            item { DemoDisclaimerBar() }
             item { SectionHeader("People") }
             item {
                 StatGrid(
@@ -601,6 +609,9 @@ fun ReporterManagementScreen(
     val reporters by viewModel.reporterStats.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var showAdd by remember { mutableStateOf(false) }
+    var created by remember { mutableStateOf<Pair<StaffAccounts.Created, String>?>(null) }
+    var resetFor by remember { mutableStateOf<Reporter?>(null) }
 
     AdminScaffold(
         role = UserRole.NEWS_ADMIN,
@@ -608,7 +619,14 @@ fun ReporterManagementScreen(
         currentRoute = Routes.ADMIN_REPORTERS,
         onNavigate = onNavigate,
         onSignOut = onSignOut,
-        snackbarHostState = snackbarHostState
+        snackbarHostState = snackbarHostState,
+        floatingActionButton = {
+            ExtendedFloatingActionButton(
+                onClick = { showAdd = true },
+                icon = { Icon(Icons.Default.Add, contentDescription = null) },
+                text = { Text("Add reporter") }
+            )
+        }
     ) { padding ->
         if (reporters.isEmpty()) {
             EmptyState(title = "No reporters", modifier = Modifier.padding(padding))
@@ -619,11 +637,12 @@ fun ReporterManagementScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
-            contentPadding = PaddingValues(bottom = 24.dp)
+            contentPadding = PaddingValues(bottom = 88.dp)
         ) {
             item { SectionHeader(reporters.size.toString() + " reporters") }
             items(reporters, key = { it.reporter.userId }) { stats ->
                 var locationMenu by remember { mutableStateOf(false) }
+                var busy by remember { mutableStateOf(false) }
                 Card(
                     Modifier
                         .fillMaxWidth()
@@ -635,6 +654,13 @@ fun ReporterManagementScreen(
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text(stats.reporter.name, style = MaterialTheme.typography.titleSmall)
+                                if (stats.reporter.loginId.isNotBlank()) {
+                                    Text(
+                                        "ID " + stats.reporter.loginId,
+                                        style = MaterialTheme.typography.labelMedium,
+                                        color = MaterialTheme.colorScheme.primary
+                                    )
+                                }
                                 Text(
                                     stats.reporter.beat + " • " + stats.reporter.assignedLocation,
                                     style = MaterialTheme.typography.labelSmall,
@@ -657,8 +683,8 @@ fun ReporterManagementScreen(
                         Spacer(Modifier.height(8.dp))
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             Box {
-                                TextButton(onClick = { locationMenu = true }) {
-                                    Text("Change location")
+                                TextButton(onClick = { locationMenu = true }, enabled = !busy) {
+                                    Text("Location")
                                 }
                                 DropdownMenu(
                                     expanded = locationMenu,
@@ -668,28 +694,38 @@ fun ReporterManagementScreen(
                                         DropdownMenuItem(
                                             text = { Text(loc) },
                                             onClick = {
-                                                viewModel.updateReporterLocation(stats.reporter.userId, loc)
                                                 locationMenu = false
+                                                busy = true
                                                 scope.launch {
-                                                    snackbarHostState.showSnackbar("Assigned to " + loc)
+                                                    val r = viewModel.updateReporterLocation(stats.reporter.userId, loc)
+                                                    busy = false
+                                                    snackbarHostState.showSnackbar(
+                                                        r.fold({ "Assigned to $loc" }, { it.message ?: "Could not change location" })
+                                                    )
                                                 }
                                             }
                                         )
                                     }
                                 }
                             }
+                            TextButton(onClick = { resetFor = stats.reporter }, enabled = !busy) {
+                                Text("Reset password")
+                            }
                             Spacer(Modifier.weight(1f))
-                            Text(
-                                "Account",
-                                style = MaterialTheme.typography.labelSmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
                             Switch(
                                 checked = stats.reporter.isActive,
+                                enabled = !busy,
                                 onCheckedChange = {
-                                    viewModel.toggleReporterActive(stats.reporter.userId)
+                                    busy = true
                                     scope.launch {
-                                        snackbarHostState.showSnackbar("Account status updated")
+                                        val r = viewModel.toggleReporterActive(stats.reporter.userId)
+                                        busy = false
+                                        snackbarHostState.showSnackbar(
+                                            r.fold(
+                                                { if (stats.reporter.isActive) "Account suspended" else "Account activated" },
+                                                { it.message ?: "Could not change the account" }
+                                            )
+                                        )
                                     }
                                 }
                             )
@@ -699,6 +735,267 @@ fun ReporterManagementScreen(
             }
         }
     }
+
+    if (showAdd) {
+        AddReporterDialog(
+            viewModel = viewModel,
+            onDismiss = { showAdd = false },
+            onCreated = { person, password ->
+                showAdd = false
+                created = person to password
+            }
+        )
+    }
+
+    created?.let { (person, password) ->
+        CredentialsDialog(
+            title = "Reporter login created",
+            loginId = person.loginId,
+            employeeId = person.employeeId,
+            name = person.name,
+            password = password,
+            onDismiss = { created = null }
+        )
+    }
+
+    resetFor?.let { reporter ->
+        ResetPasswordDialog(
+            reporter = reporter,
+            viewModel = viewModel,
+            onDismiss = { resetFor = null },
+            onDone = {
+                resetFor = null
+                scope.launch { snackbarHostState.showSnackbar("New password set for " + reporter.name) }
+            }
+        )
+    }
+}
+
+/**
+ * Creates a reporter login. The admin picks the area and types the temporary
+ * password; the login id - which is also the employee id - is numbered by the
+ * server, and shown here beforehand as a preview.
+ */
+@Composable
+private fun AddReporterDialog(
+    viewModel: AdminViewModel,
+    onDismiss: () -> Unit,
+    onCreated: (StaffAccounts.Created, String) -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var area by remember { mutableStateOf("01") }
+    var name by remember { mutableStateOf("") }
+    var phone by remember { mutableStateOf("") }
+    var location by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var preview by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+
+    val areaOk = area.length == 2 && area.all { it.isDigit() } && area != "00"
+    LaunchedEffect(area) {
+        preview = ""
+        if (areaOk) preview = viewModel.nextReporterId(area).getOrDefault("")
+    }
+
+    val problem = when {
+        !areaOk -> "Area code must be 2 digits, 01 to 99"
+        name.isBlank() -> "Enter the full name"
+        phone.filter { it.isDigit() }.length < 10 -> "Enter a 10-digit mobile number"
+        password.length < 8 -> "The password must be at least 8 characters"
+        else -> null
+    }
+
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text("Add reporter") },
+        text = {
+            Column(
+                Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
+            ) {
+                OutlinedTextField(
+                    value = area,
+                    onValueChange = { v -> area = v.filter { it.isDigit() }.take(2) },
+                    label = { Text("Area code") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number)
+                )
+                Text(
+                    if (preview.isNotBlank()) "Login ID / Employee ID: $preview"
+                    else "Login ID / Employee ID: jv" + area.padStart(2, '0') + "r…",
+                    style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.primary
+                )
+                OutlinedTextField(
+                    value = name,
+                    onValueChange = { name = it },
+                    label = { Text("Full name") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = phone,
+                    onValueChange = { v -> phone = v.filter { it.isDigit() || it == '+' || it == ' ' }.take(16) },
+                    label = { Text("Mobile number") },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Phone)
+                )
+                OutlinedTextField(
+                    value = location,
+                    onValueChange = { location = it },
+                    label = { Text("Location") },
+                    singleLine = true
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("Temporary password") },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        TextButton(onClick = { showPassword = !showPassword }) {
+                            Text(if (showPassword) "Hide" else "Show")
+                        }
+                    }
+                )
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (problem != null) {
+                        error = problem
+                        return@TextButton
+                    }
+                    error = null
+                    saving = true
+                    scope.launch {
+                        viewModel.createReporter(area, name.trim(), phone.trim(), location.trim(), password)
+                            .onSuccess { onCreated(it, password) }
+                            .onFailure { error = it.message ?: "Could not create the login" }
+                        saving = false
+                    }
+                }
+            ) { Text(if (saving) "Creating…" else "Create login") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancel") }
+        }
+    )
+}
+
+/** Shown once after a login is made, so the admin can hand it over. */
+@Composable
+private fun CredentialsDialog(
+    title: String,
+    loginId: String,
+    employeeId: String,
+    name: String,
+    password: String,
+    onDismiss: () -> Unit
+) {
+    val clipboard = LocalClipboardManager.current
+    var copied by remember { mutableStateOf(false) }
+    val block = "J Voice login - $name\nLogin ID: $loginId\nEmployee ID: $employeeId\n" +
+        "Temporary password: $password\nSign in with the Login ID and password."
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                Text("Name: $name")
+                Text("Login ID: $loginId", style = MaterialTheme.typography.titleSmall)
+                Text("Employee ID: $employeeId")
+                Text("Temporary password: $password")
+                Text(
+                    "The password is not shown again - hand it over now.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("Done") } },
+        dismissButton = {
+            TextButton(onClick = {
+                clipboard.setText(AnnotatedString(block))
+                copied = true
+            }) { Text(if (copied) "Copied" else "Copy") }
+        }
+    )
+}
+
+@Composable
+private fun ResetPasswordDialog(
+    reporter: Reporter,
+    viewModel: AdminViewModel,
+    onDismiss: () -> Unit,
+    onDone: () -> Unit
+) {
+    val scope = rememberCoroutineScope()
+    var password by remember { mutableStateOf("") }
+    var showPassword by remember { mutableStateOf(false) }
+    var error by remember { mutableStateOf<String?>(null) }
+    var saving by remember { mutableStateOf(false) }
+    AlertDialog(
+        onDismissRequest = { if (!saving) onDismiss() },
+        title = { Text("Reset password") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    reporter.name + if (reporter.loginId.isNotBlank()) " · " + reporter.loginId else "",
+                    style = MaterialTheme.typography.bodyMedium
+                )
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("New password") },
+                    singleLine = true,
+                    visualTransformation = if (showPassword) VisualTransformation.None else PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                    trailingIcon = {
+                        TextButton(onClick = { showPassword = !showPassword }) {
+                            Text(if (showPassword) "Hide" else "Show")
+                        }
+                    }
+                )
+                Text(
+                    "Their current sessions end and the old password stops working.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+                error?.let {
+                    Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                enabled = !saving,
+                onClick = {
+                    if (password.length < 8) {
+                        error = "The password must be at least 8 characters"
+                        return@TextButton
+                    }
+                    saving = true
+                    scope.launch {
+                        viewModel.setReporterPassword(reporter.userId, password)
+                            .onSuccess { onDone() }
+                            .onFailure { error = it.message ?: "Could not set the password" }
+                        saving = false
+                    }
+                }
+            ) { Text(if (saving) "Saving…" else "Set password") }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss, enabled = !saving) { Text("Cancel") }
+        }
+    )
 }
 
 @Composable

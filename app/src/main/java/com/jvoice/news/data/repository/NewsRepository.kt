@@ -3,6 +3,8 @@ package com.jvoice.news.data.repository
 import com.google.firebase.firestore.ListenerRegistration
 import com.jvoice.core.auth.SessionStore
 import com.jvoice.core.data.Firestore
+import com.jvoice.core.reader.ReaderProfile
+import com.jvoice.core.data.StaffAccounts
 import com.jvoice.core.data.StaffDirectory
 import com.jvoice.core.data.articleFrom
 import com.jvoice.core.data.categoryFrom
@@ -98,8 +100,11 @@ object NewsRepository {
     private val _currentUser = MutableStateFlow<User?>(null)
     val currentUser: StateFlow<User?> = _currentUser.asStateFlow()
 
-    private val _selectedLocation = MutableStateFlow("Hyderabad")
-    val selectedLocation: StateFlow<String> = _selectedLocation.asStateFlow()
+    /**
+     * The reader's location filter. Owned by [ReaderProfile], which persists it
+     * and mirrors it to the server; this is just the feed's view of it.
+     */
+    val selectedLocation: StateFlow<String> get() = ReaderProfile.location
 
     /**
      * Reference data, not content.
@@ -163,9 +168,29 @@ object NewsRepository {
         articleRegistration?.remove()
         articleRegistration = null
         attachArticles()
+        notificationRegistration?.remove()
+        notificationRegistration = null
+        attachNotifications()
     }
 
     private var articleRegistration: ListenerRegistration? = null
+    private var notificationRegistration: ListenerRegistration? = null
+
+    /**
+     * The notifications query, by audience - the same reasoning as
+     * [attachArticles]. The rule lets anyone read a broadcast (no targetRole)
+     * and only the desk read the rest, so an anonymous reader has to ask for
+     * broadcasts explicitly or the whole query is refused.
+     */
+    private fun attachNotifications() {
+        val isDesk = SessionStore.isSignedIn
+        notificationRegistration = Firestore.listen(
+            Firestore.NEWS_NOTIFICATIONS,
+            ::notificationFrom,
+            { list -> _notifications.value = list.sortedByDescending { it.timeMillis } },
+            narrow = if (isDesk) null else { q -> q.whereEqualTo("targetRole", null) }
+        )
+    }
 
     /**
      * The articles query, chosen by who is asking.
@@ -201,9 +226,7 @@ object NewsRepository {
             _categories.value = list.sortedBy { it.name.en }
         }?.let(registrations::add)
 
-        Firestore.listen(Firestore.NEWS_NOTIFICATIONS, ::notificationFrom) { list ->
-            _notifications.value = list.sortedByDescending { it.timeMillis }
-        }?.let(registrations::add)
+        attachNotifications()
 
         StaffDirectory.start()
     }
@@ -228,7 +251,7 @@ object NewsRepository {
                 name = "Reader",
                 email = "",
                 role = UserRole.READER,
-                location = _selectedLocation.value
+                location = ReaderProfile.location.value
             )
         } else {
             User(
@@ -237,18 +260,24 @@ object NewsRepository {
                 email = desk.email,
                 phone = desk.phone,
                 role = role,
-                location = _selectedLocation.value
+                location = ReaderProfile.location.value,
+                avatarUrl = desk.avatarUrl,
+                loginId = desk.loginId
             )
         }
+    }
+
+    /** Picks up a profile change (name, phone, photo) without re-routing. */
+    fun refreshCurrentUser() {
+        val user = _currentUser.value ?: return
+        if (user.role != UserRole.READER) signInAs(user.role)
     }
 
     fun signOut() {
         _currentUser.value = null
     }
 
-    fun setLocation(location: String) {
-        _selectedLocation.value = location
-    }
+    fun setLocation(location: String) = ReaderProfile.setLocation(location)
 
     /* ---------------------------------------------------------------- lookups */
 
@@ -339,7 +368,7 @@ object NewsRepository {
 
     /* ------------------------------------------------------ reporter workflow */
 
-    fun createOrUpdateArticle(
+    suspend fun createOrUpdateArticle(
         existingId: String?,
         headline: LocalizedText,
         shortDescription: LocalizedText,
@@ -354,7 +383,7 @@ object NewsRepository {
         videoUrls: List<String> = emptyList(),
         reporterId: String,
         reporterName: String
-    ): String {
+    ): Firestore.WriteResult {
         val status = if (submit) NewsStatus.SUBMITTED else NewsStatus.DRAFT
         val existing = existingId?.let { articleById(it) }
         val id = existingId ?: Firestore.newId(Firestore.ARTICLES)
@@ -384,9 +413,13 @@ object NewsRepository {
             rejectionReason = if (submit) null else existing?.rejectionReason,
             editorNote = if (submit) null else existing?.editorNote,
             views = existing?.views ?: 0,
-            reportCount = existing?.reportCount ?: 0
+            reportCount = existing?.reportCount ?: 0,
+            // The desk's choices survive a reporter's resubmit.
+            detailEnabled = existing?.detailEnabled ?: true,
+            notifyReaders = existing?.notifyReaders ?: true
         )
-        Firestore.set(Firestore.ARTICLES, id, article.toMap())
+        val result = Firestore.setAndWait(Firestore.ARTICLES, id, article.toMap())
+        if (result is Firestore.WriteResult.Failed) return result
 
         if (submit) {
             pushNotification(
@@ -397,7 +430,7 @@ object NewsRepository {
                 targetRole = UserRole.EDITOR
             )
         }
-        return id
+        return result
     }
 
     fun articlesByReporter(reporterId: String): List<NewsArticle> =
@@ -430,7 +463,9 @@ object NewsRepository {
         shortDescription: LocalizedText,
         content: LocalizedText,
         categoryId: String,
-        tags: List<LocalizedText>
+        tags: List<LocalizedText>,
+        detailEnabled: Boolean,
+        notifyReaders: Boolean
     ) {
         Firestore.update(
             Firestore.ARTICLES, articleId,
@@ -440,16 +475,29 @@ object NewsRepository {
                 "content" to content.toMap(),
                 "categoryId" to categoryId,
                 "tags" to tags.map { it.toMap() },
+                "detailEnabled" to detailEnabled,
+                "notifyReaders" to notifyReaders,
                 "updatedAt" to now()
             )
         )
     }
 
-    /** Approve and publish in one step - approved copy goes live for readers. */
-    fun approveArticle(articleId: String, publishNow: Boolean = true) {
-        val article = articleById(articleId) ?: return
+    /**
+     * Approve, and publish in the same step when [publishNow] - the copy goes
+     * live for readers and their phones are told, as the console does when it
+     * publishes (notifyPublished in J Voice web/src/store/firestoreData.js).
+     *
+     * Waits for J Voice to take the change, so the screen can say when it did not.
+     */
+    suspend fun approveArticle(
+        articleId: String,
+        publishNow: Boolean = true,
+        notifyReaders: Boolean? = null
+    ): Firestore.WriteResult {
+        val article = articleById(articleId)
+            ?: return Firestore.WriteResult.Failed("This story is no longer in the queue. Pull to refresh.")
         val publishedAt = if (publishNow) now() else article.publishedAt
-        Firestore.update(
+        val result = Firestore.updateAndWait(
             Firestore.ARTICLES, articleId,
             mapOf(
                 "status" to (if (publishNow) NewsStatus.PUBLISHED else NewsStatus.APPROVED).name,
@@ -460,6 +508,7 @@ object NewsRepository {
                 "updatedAt" to now()
             )
         )
+        if (result is Firestore.WriteResult.Failed) return result
 
         pushNotification(
             title = if (publishNow)
@@ -470,15 +519,19 @@ object NewsRepository {
             articleId = articleId,
             targetRole = UserRole.REPORTER
         )
-        if (publishNow && article.isBreaking) {
+        // A published story reaches readers' phones unless the desk switched
+        // that off: a broadcast (no targetRole) is what pushNewsNotification sends.
+        if (publishNow && (notifyReaders ?: article.notifyReaders)) {
             pushNotification(
-                title = LocalizedText("Breaking news", "బ్రేకింగ్ న్యూస్"),
+                title = if (article.isBreaking) LocalizedText("Breaking news", "బ్రేకింగ్ న్యూస్")
+                else LocalizedText("New story", "కొత్త వార్త"),
                 message = article.headline.trimmedTo(80),
-                type = NotificationType.BREAKING,
+                type = if (article.isBreaking) NotificationType.BREAKING else NotificationType.GENERAL,
                 articleId = articleId,
                 targetRole = null
             )
         }
+        return result
     }
 
     fun rejectArticle(articleId: String, reason: LocalizedText) {
@@ -531,6 +584,15 @@ object NewsRepository {
                 "updatedAt" to stamp
             )
         )
+        // Tell readers' phones, as approve-and-publish does.
+        if (article.notifyReaders) pushNotification(
+            title = if (article.isBreaking) LocalizedText("Breaking news", "బ్రేకింగ్ న్యూస్")
+            else LocalizedText("New story", "కొత్త వార్త"),
+            message = article.headline.trimmedTo(80),
+            type = if (article.isBreaking) NotificationType.BREAKING else NotificationType.GENERAL,
+            articleId = articleId,
+            targetRole = null
+        )
     }
 
     fun unpublish(articleId: String) {
@@ -556,8 +618,9 @@ object NewsRepository {
         )
     }
 
+    /** Removes a story and everything filed under it - comments and reports. */
     fun removeArticle(articleId: String) {
-        Firestore.delete(Firestore.ARTICLES, articleId)
+        Firestore.deleteWithChildren(Firestore.ARTICLES, articleId, "comments", "reports")
     }
 
     fun filterArticles(
@@ -618,15 +681,33 @@ object NewsRepository {
         )
     }
 
-    fun toggleReporterActive(userId: String) {
+    /**
+     * Suspends or restores a reporter through the staffAccounts function, which
+     * also blocks the Auth login and ends any open session - the `isLogin` flag
+     * alone only stopped the next launch.
+     */
+    suspend fun toggleReporterActive(userId: String): Result<Unit> {
         val current = reporters.value.firstOrNull { it.userId == userId }?.isActive ?: true
-        StaffDirectory.setActive(userId, !current)
+        return StaffAccounts.setActive(userId, !current)
     }
 
-    fun updateReporterLocation(userId: String, location: String) {
-        val person = users.value.firstOrNull { it.id == userId } ?: return
-        StaffDirectory.updateProfile(userId, person.name, person.email, location)
-    }
+    /** Through the function: a news admin may not write a profile directly. */
+    suspend fun updateReporterLocation(userId: String, location: String): Result<Unit> =
+        StaffAccounts.setLocation(userId, location)
+
+    suspend fun createReporter(
+        area: String,
+        name: String,
+        phone: String,
+        location: String,
+        password: String
+    ): Result<StaffAccounts.Created> =
+        StaffAccounts.create("reporter", area, name, phone, location, password)
+
+    suspend fun nextReporterId(area: String): Result<String> = StaffAccounts.nextId("reporter", area)
+
+    suspend fun setReporterPassword(userId: String, password: String): Result<Unit> =
+        StaffAccounts.setPassword(userId, password)
 
     /* ------------------------------------------------------ super admin: users */
 
@@ -685,21 +766,34 @@ object NewsRepository {
         )
     }
 
+    /**
+     * Notifications for [role], with read state resolved for who is asking.
+     *
+     * A reader's "read" lives on the device (see [ReadStateRepository]): the
+     * document is shared by every reader and anonymous callers may not write
+     * it, so a flag there could neither be per-person nor be set. The desk,
+     * signed in, keeps the server flag.
+     */
     fun notificationsFor(role: UserRole): List<NotificationItem> =
         _notifications.value
             .filter { it.targetRole == null || it.targetRole == role }
+            .map {
+                if (role == UserRole.READER) it.copy(isRead = ReadStateRepository.isNotificationRead(it.id)) else it
+            }
             .sortedByDescending { it.timeMillis }
 
     fun unreadCountFor(role: UserRole): Int = notificationsFor(role).count { !it.isRead }
 
-    fun markNotificationRead(id: String) {
-        Firestore.update(Firestore.NEWS_NOTIFICATIONS, id, mapOf("isRead" to true))
+    fun markNotificationRead(id: String, role: UserRole = UserRole.READER) {
+        if (role == UserRole.READER) {
+            ReadStateRepository.markNotificationRead(id)
+        } else {
+            Firestore.update(Firestore.NEWS_NOTIFICATIONS, id, mapOf("isRead" to true))
+        }
     }
 
     fun markAllNotificationsRead(role: UserRole) {
-        notificationsFor(role).filterNot { it.isRead }.forEach {
-            Firestore.update(Firestore.NEWS_NOTIFICATIONS, it.id, mapOf("isRead" to true))
-        }
+        notificationsFor(role).filterNot { it.isRead }.forEach { markNotificationRead(it.id, role) }
     }
 
     /* ----------------------------------------------------- dashboard counters */

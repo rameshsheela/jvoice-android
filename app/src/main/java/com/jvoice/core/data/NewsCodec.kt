@@ -34,6 +34,8 @@ fun NewsArticle.toMap(): Map<String, Any?> = mapOf(
     "imageUrl" to imageUrl,
     "photoUrls" to photoUrls,
     "videoUrls" to videoUrls,
+    "detailEnabled" to detailEnabled,
+    "notifyReaders" to notifyReaders,
     "tags" to tags.toMapList(),
     "isBreaking" to isBreaking,
     "isFeatured" to isFeatured,
@@ -49,6 +51,9 @@ fun NewsArticle.toMap(): Map<String, Any?> = mapOf(
     "editorNote" to editorNote?.toMap(),
     "views" to views,
     "reportCount" to reportCount,
+    "likes" to likes,
+    "dislikes" to dislikes,
+    "comments" to comments,
     // Denormalised so the reader feed can order published stories without
     // reading every draft: Firestore cannot order on a field some documents
     // lack, and publishedAt is null until publication.
@@ -83,7 +88,14 @@ fun articleFrom(id: String, data: Map<String, Any?>): NewsArticle {
         rejectionReason = data["rejectionReason"]?.let { localizedFrom(it) },
         editorNote = data["editorNote"]?.let { localizedFrom(it) },
         views = data.int("views"),
-        reportCount = data.int("reportCount")
+        reportCount = data.int("reportCount"),
+        likes = data.int("likes"),
+        dislikes = data.int("dislikes"),
+        comments = data.int("comments"),
+        // Absent means on: every story before the flag existed opens.
+        detailEnabled = data.bool("detailEnabled", true),
+        // Absent means on, as the console treats it.
+        notifyReaders = data.bool("notifyReaders", true)
     )
 }
 

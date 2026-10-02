@@ -10,6 +10,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
@@ -36,6 +37,7 @@ import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
@@ -88,6 +90,7 @@ fun ArticleReviewScreen(
     val categories by viewModel.categories.collectAsState()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var approving by remember { mutableStateOf(false) }
 
     var action by remember { mutableStateOf(ReviewAction.NONE) }
     // The reason reaches the reporter, who may work in the other language, so it
@@ -173,7 +176,7 @@ fun ArticleReviewScreen(
         snackbarHost = { SnackbarHost(snackbarHostState) },
         bottomBar = {
             if (article != null) {
-                Column(Modifier.padding(16.dp)) {
+                Column(Modifier.navigationBarsPadding().padding(16.dp)) {
                     OutlinedButton(
                         onClick = { onCreateAIShort(article.id) },
                         modifier = Modifier.fillMaxWidth()
@@ -205,23 +208,32 @@ fun ArticleReviewScreen(
                     Spacer(Modifier.height(8.dp))
                     Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         OutlinedButton(
+                            enabled = !approving,
                             onClick = {
-                                viewModel.approveOnly()
-                                scope.launch { snackbarHostState.showSnackbar("Approved - awaiting publish") }
-                                onDone()
+                                approving = true
+                                scope.launch {
+                                    val error = viewModel.approveOnly()
+                                    approving = false
+                                    if (error == null) onDone() else snackbarHostState.showSnackbar(error)
+                                }
                             },
                             modifier = Modifier.weight(1f)
                         ) { Text("Approve only") }
                         Button(
+                            enabled = !approving,
                             onClick = {
-                                viewModel.approveAndPublish()
-                                onDone()
+                                approving = true
+                                scope.launch {
+                                    val error = viewModel.approveAndPublish()
+                                    approving = false
+                                    if (error == null) onDone() else snackbarHostState.showSnackbar(error)
+                                }
                             },
                             modifier = Modifier.weight(1f)
                         ) {
                             Icon(Icons.Default.Check, contentDescription = null, modifier = Modifier.height(18.dp))
                             Spacer(Modifier.width(6.dp))
-                            Text("Approve & publish")
+                            Text(if (approving) "Publishing…" else "Approve & publish")
                         }
                     }
                 }
@@ -369,7 +381,41 @@ fun ArticleReviewScreen(
                 }
             }
 
+            SectionHeader("When published")
+            ReviewSwitch(
+                title = "Opens a full article page",
+                subtitle = "Off for a story that is complete on the card",
+                checked = draft.detailEnabled,
+                onChange = { value -> viewModel.updateDraft { it.copy(detailEnabled = value) } }
+            )
+            ReviewSwitch(
+                title = "Notify readers when published",
+                subtitle = "Sends a notification to every reader's phone",
+                checked = draft.notifyReaders,
+                onChange = { value -> viewModel.updateDraft { it.copy(notifyReaders = value) } }
+            )
+
             Spacer(Modifier.height(20.dp))
         }
+    }
+}
+
+@Composable
+private fun ReviewSwitch(title: String, subtitle: String, checked: Boolean, onChange: (Boolean) -> Unit) {
+    Row(
+        Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 6.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.titleSmall)
+            Text(
+                subtitle,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
+        }
+        Switch(checked = checked, onCheckedChange = onChange)
     }
 }

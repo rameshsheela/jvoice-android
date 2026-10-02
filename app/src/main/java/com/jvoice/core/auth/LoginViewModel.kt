@@ -32,8 +32,8 @@ sealed interface LoginUiState {
  *
  * ### The login identifier
  *
- * Staff type a bare username — `kiran`, `sridevi` — and it is expanded to
- * `kiran@jvoicenews.com` before it reaches Firebase. Firebase Auth only does
+ * Staff type a bare login id — `jv01r001`, `jv01e001` — and it is expanded to
+ * `jv01r001@jvoicetelugu.com` before it reaches Firebase. Firebase Auth only does
  * email/password, but asking a district reporter to type a full address is a
  * needless source of typos. An input that already contains `@` is passed through
  * untouched, so an external address still works.
@@ -62,9 +62,9 @@ class LoginViewModel(application: Application) : AndroidViewModel(application) {
         private const val TAG = "LoginViewModel"
 
         /** Staff login domain. A bare username is expanded onto this. */
-        const val LOGIN_DOMAIN = "jvoicenews.com"
+        const val LOGIN_DOMAIN = "jvoicetelugu.com"
 
-        /** `kiran` -> `kiran@jvoicenews.com`; `x@y.com` -> unchanged. */
+        /** `jv01r001` -> `jv01r001@jvoicetelugu.com`; `x@y.com` -> unchanged. */
         fun toEmail(loginId: String): String {
             val id = loginId.trim()
             return if (id.contains("@")) id else "$id@$LOGIN_DOMAIN"

@@ -7,6 +7,7 @@ import com.jvoice.news.data.model.NewsArticle
 import com.jvoice.news.data.model.NotificationItem
 import com.jvoice.news.data.model.UserRole
 import com.jvoice.news.data.repository.NewsRepository
+import com.jvoice.news.data.repository.ReadStateRepository
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -61,19 +62,35 @@ class ReaderViewModel : ViewModel() {
         )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), HomeFeed())
 
-    val notifications: StateFlow<List<NotificationItem>> = NewsRepository.notifications
-        .map { NewsRepository.notificationsFor(UserRole.READER) }
+    // Combined with the device's read set, so opening one updates the list
+    // and the badge without a server round trip.
+    val notifications: StateFlow<List<NotificationItem>> = combine(
+        NewsRepository.notifications,
+        ReadStateRepository.readNotificationIds
+    ) { _, _ -> NewsRepository.notificationsFor(UserRole.READER) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
-    val unreadCount: StateFlow<Int> = NewsRepository.notifications
-        .map { NewsRepository.unreadCountFor(UserRole.READER) }
+    val unreadCount: StateFlow<Int> = combine(
+        NewsRepository.notifications,
+        ReadStateRepository.readNotificationIds
+    ) { _, _ -> NewsRepository.unreadCountFor(UserRole.READER) }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), 0)
 
     /** Clips feed: every published article, breaking first. */
+    /**
+     * The swipe deck: newest first, with *fresh* breaking news pinned on top.
+     *
+     * Breaking is pinned only while it is actually breaking - a story flagged
+     * three weeks ago must not sit above today's news for ever, which is what
+     * pinning every breaking story did. After [BREAKING_PIN_MS] it takes its
+     * place in date order like everything else.
+     */
     val clips: StateFlow<List<NewsArticle>> = NewsRepository.articles
         .map {
             val published = NewsRepository.publishedArticles()
-            published.filter { a -> a.isBreaking } + published.filterNot { a -> a.isBreaking }
+            val cutoff = System.currentTimeMillis() - BREAKING_PIN_MS
+            val fresh = { a: NewsArticle -> a.isBreaking && (a.publishedAt ?: a.createdAt) >= cutoff }
+            published.filter(fresh) + published.filterNot(fresh)
         }
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
@@ -139,3 +156,6 @@ class ReaderViewModel : ViewModel() {
 
     fun clearSaved() = NewsRepository.clearSaved()
 }
+
+/** How long a breaking story stays pinned to the top of the deck. */
+private const val BREAKING_PIN_MS = 24L * 60 * 60 * 1000

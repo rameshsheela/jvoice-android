@@ -49,7 +49,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import com.jvoice.news.components.CompactNewsCard
-import com.jvoice.news.components.DemoDisclaimerBar
 import com.jvoice.news.components.EmptyState
 import com.jvoice.news.components.ErrorState
 import com.jvoice.news.components.FeaturedNewsCard
@@ -200,7 +199,6 @@ private fun HomeContent(
         modifier = Modifier.fillMaxSize(),
         contentPadding = PaddingValues(bottom = 24.dp)
     ) {
-        item { DemoDisclaimerBar() }
 
         if (feed.breaking.isNotEmpty()) {
             item { SectionHeader("Breaking News", subtitle = "బ్రేకింగ్ న్యూస్") }

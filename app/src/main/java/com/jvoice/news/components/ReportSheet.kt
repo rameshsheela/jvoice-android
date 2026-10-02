@@ -151,7 +151,7 @@ fun ReportSheet(
 
             Spacer(Modifier.height(6.dp))
             Text(
-                "Goes to the editorial desk. Demo build - stored locally.",
+                "Goes straight to the J Voice editorial desk.",
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.outline,
                 modifier = Modifier.padding(horizontal = 20.dp)

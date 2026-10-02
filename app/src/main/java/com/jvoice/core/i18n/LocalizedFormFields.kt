@@ -12,9 +12,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.ContentCopy
-import androidx.compose.material.icons.filled.WarningAmber
+import androidx.compose.material.icons.filled.Info
 import androidx.compose.material3.Badge
-import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
@@ -122,13 +121,22 @@ fun ContentLanguageTabs(
                 val emptyCount = LocalizedFormState.emptyFieldCount(fields, language)
                 Tab(
                     selected = state.language == language,
+                    // Only the chosen tab in the brand colour; red on both
+                    // read as both being selected.
+                    selectedContentColor = MaterialTheme.colorScheme.primary,
+                    unselectedContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
                     onClick = { state.select(language) },
                     text = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
                             if (emptyCount > 0) {
-                                BadgedBox(badge = { Badge { Text(emptyCount.toString()) } }) {
-                                    Text(language.labelNative)
-                                }
+                                // Beside the name, not over it: a corner badge
+                                // clipped the last letters of both labels.
+                                Text(language.labelNative)
+                                Spacer(Modifier.width(6.dp))
+                                Badge(
+                                    containerColor = MaterialTheme.colorScheme.surfaceVariant,
+                                    contentColor = MaterialTheme.colorScheme.onSurfaceVariant
+                                ) { Text(emptyCount.toString()) }
                             } else {
                                 Row(verticalAlignment = Alignment.CenterVertically) {
                                     Icon(
@@ -184,10 +192,11 @@ fun LocalizedFormStatus(
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         } else {
+            // Informational, not an error: one language is enough to file.
             Icon(
-                Icons.Default.WarningAmber,
+                Icons.Default.Info,
                 contentDescription = null,
-                tint = MaterialTheme.colorScheme.error,
+                tint = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.size(15.dp)
             )
             Spacer(Modifier.width(6.dp))
@@ -197,7 +206,7 @@ fun LocalizedFormStatus(
                     else Strings.Desk.englishEmpty.get(language)
                 },
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error
+                color = MaterialTheme.colorScheme.onSurfaceVariant
             )
         }
     }
@@ -223,7 +232,9 @@ fun LocalizedOutlinedTextField(
     minLines: Int = 1,
     singleLine: Boolean = false,
     required: Boolean = false,
-    placeholder: LocalizedText? = null
+    placeholder: LocalizedText? = null,
+    /** Turn on after a submit attempt - an untouched form is not an error. */
+    showError: Boolean = false
 ) {
     val other = value.rawFor(language.other)
     val isEmpty = value.rawFor(language).isBlank()
@@ -242,7 +253,7 @@ fun LocalizedOutlinedTextField(
             placeholder = placeholder?.let { { Text(it.get(language)) } },
             minLines = minLines,
             singleLine = singleLine,
-            isError = required && value.isBlank,
+            isError = showError && required && value.isBlank,
             modifier = Modifier.fillMaxWidth()
         )
         // Offer a copy across only when there is something to copy and nothing

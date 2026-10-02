@@ -14,14 +14,15 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import coil.compose.AsyncImage
 import com.jvoice.core.flags.FeatureFlags
 import com.jvoice.core.flags.flagEnabled
+import com.jvoice.core.flags.flagOptedIn
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.outlined.Comment
 import androidx.compose.material.icons.filled.ThumbDown
 import androidx.compose.material.icons.filled.ThumbUp
 import androidx.compose.material.icons.outlined.Flag
@@ -33,10 +34,10 @@ import androidx.compose.material.icons.filled.BookmarkBorder
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material.icons.filled.Share
-import androidx.compose.material.icons.filled.ViewAgenda
 import androidx.compose.material3.Badge
 import androidx.compose.material3.BadgedBox
 import androidx.compose.material3.DropdownMenu
@@ -67,6 +68,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
@@ -78,13 +80,14 @@ import com.jvoice.news.components.BreakingBadge
 import com.jvoice.news.components.EmptyState
 import com.jvoice.news.components.ReportSheet
 import com.jvoice.news.components.LoadingState
+import com.jvoice.news.components.VideoOrPhoto
 import com.jvoice.news.components.NewsImage
 import com.jvoice.news.components.VerticalTwoPanelFlip
 import com.jvoice.news.data.model.ArticleEngagement
 import com.jvoice.news.data.model.NewsArticle
 import com.jvoice.news.data.model.Reaction
-import com.jvoice.aishorts.data.repository.AIShortRepository
 import com.jvoice.news.data.repository.EngagementRepository
+import com.jvoice.news.data.repository.NewsRepository
 import com.jvoice.news.data.repository.ReadStateRepository
 import com.jvoice.news.utils.shareArticle
 import com.jvoice.news.utils.toReadableCount
@@ -109,7 +112,7 @@ fun NewsFlipScreen(
     onOpenComments: (String) -> Unit,
     onOpenSearch: () -> Unit,
     onOpenNotifications: () -> Unit,
-    onOpenClassicFeed: () -> Unit,
+    onOpenProfile: () -> Unit,
     bottomBar: @Composable () -> Unit
 ) {
     val allClips by viewModel.clips.collectAsState()
@@ -125,38 +128,38 @@ fun NewsFlipScreen(
     val scope = rememberCoroutineScope()
     val context = LocalContext.current
 
-    val readIds by ReadStateRepository.readIds.collectAsState()
-    val round by ReadStateRepository.round.collectAsState()
-
-    // Once every story has been read the round ends and the feed starts over,
-    // so there is always something to swipe.
-    LaunchedEffect(readIds, allClips) {
-        if (ReadStateRepository.hasReadAll(allClips.map { it.id })) {
-            ReadStateRepository.startNewRound()
-            snackbarHostState.showSnackbar("You are all caught up - starting again")
-        }
-    }
-
-    // The deck: unread stories only, with the chosen category first and the rest
-    // of the news after it - so a category with a single story still swipes on.
-    // Rebuilt only when the filter or the round changes, so marking the current
-    // card as read cannot pull it out from under the swipe.
-    val cards = remember(allClips, categoryFilter, round) {
+    // The deck: every published story, unread ones first and the ones this
+    // device has already read after them - so what is new is what comes up,
+    // and when nothing is new the older stories are still there to swipe.
+    // Within each half the chosen category leads and the rest of the news
+    // follows, so a category with a single story still swipes on.
+    //
+    // Rebuilt only when the stories or the filter change - deliberately not
+    // when the read set changes, so marking the current card as read cannot
+    // pull it out from under the swipe.
+    val cards = remember(allClips, categoryFilter) {
         val alreadyRead = ReadStateRepository.readIds.value
-        val notYetSeen = allClips.filterNot { alreadyRead.contains(it.id) }
-        val pool = if (notYetSeen.isEmpty()) allClips else notYetSeen
-        if (categoryFilter == null) {
-            pool
-        } else {
-            pool.filter { it.categoryId == categoryFilter } +
-                pool.filterNot { it.categoryId == categoryFilter }
-        }
+        fun order(list: List<NewsArticle>) =
+            if (categoryFilter == null) list
+            else list.filter { it.categoryId == categoryFilter } +
+                list.filterNot { it.categoryId == categoryFilter }
+        order(allClips.filterNot { alreadyRead.contains(it.id) }) +
+            order(allClips.filter { alreadyRead.contains(it.id) })
     }
 
-    // The first card counts as read as soon as the deck is shown.
-    LaunchedEffect(cards) {
-        cards.firstOrNull()?.let { ReadStateRepository.markRead(it.id) }
+    // The story on screen. A story counts as read when its card comes to rest
+    // in front of the reader - never merely because it entered the deck - and
+    // the first time that happens on this device it counts as one view.
+    var shownId by remember { mutableStateOf<String?>(null) }
+    fun onCardShown(article: NewsArticle) {
+        shownId = article.id
+        if (ReadStateRepository.markRead(article.id)) NewsRepository.registerView(article.id)
     }
+
+    // When the deck is rebuilt - a story published while reading, a filter
+    // change - the flip is re-seated on the story that was showing, if it is
+    // still there, so nothing moves under the reader's thumb.
+    val pageOnReset = cards.indexOfFirst { it.id == shownId }.coerceAtLeast(0)
 
     Scaffold(
         topBar = {
@@ -170,7 +173,9 @@ fun NewsFlipScreen(
                                 fontWeight = FontWeight.Black,
                                 color = MaterialTheme.colorScheme.primary
                             )
-                            if (flagEnabled(FeatureFlags.Keys.NEWS_LOCATION_DROPDOWN)) {
+                            // Opt-in, unlike the other flags: the picker only
+                            // appears once an admin has switched it on.
+                            if (flagOptedIn(FeatureFlags.Keys.NEWS_LOCATION_DROPDOWN)) {
                                 Spacer(Modifier.width(6.dp))
                                 Box {
                                     Row(
@@ -206,12 +211,9 @@ fun NewsFlipScreen(
                             }
                         }
                     },
+                    // Search, notifications and the profile. The profile moved
+                    // up here from the pill bar so the bar holds content tabs only.
                     actions = {
-                        if (flagEnabled(FeatureFlags.Keys.MODULE_ICON)) {
-                            IconButton(onClick = onOpenClassicFeed) {
-                                Icon(Icons.Default.ViewAgenda, contentDescription = "Classic feed")
-                            }
-                        }
                         IconButton(onClick = onOpenSearch) {
                             Icon(Icons.Default.Search, contentDescription = "Search news")
                         }
@@ -223,6 +225,9 @@ fun NewsFlipScreen(
                             } else {
                                 Icon(Icons.Default.Notifications, contentDescription = "Notifications")
                             }
+                        }
+                        IconButton(onClick = onOpenProfile) {
+                            Icon(Icons.Default.Person, contentDescription = "Profile")
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -292,9 +297,10 @@ fun NewsFlipScreen(
                 count = cards.size,
                 modifier = Modifier.fillMaxSize(),
                 topFraction = 0.36f,
-                resetKey = categoryFilter to round,
+                resetKey = cards,
+                pageOnReset = pageOnReset,
                 onPageSettled = { index ->
-                    cards.getOrNull(index)?.let { ReadStateRepository.markRead(it.id) }
+                    cards.getOrNull(index)?.let(::onCardShown)
                 },
                 topPanel = { index ->
                     ImageLeaf(
@@ -340,17 +346,19 @@ private fun ImageLeaf(
     onShare: () -> Unit,
     onClick: () -> Unit
 ) {
-    Box(
-        Modifier
+    // A story with a video plays it here, in the photo's place, once the
+    // reader taps play. The tap-through to the article is only offered when
+    // the story has one.
+    VideoOrPhoto(
+        videoUrl = article.videoUrls.firstOrNull { it.isNotBlank() },
+        imageUrl = article.imageUrl,
+        contentDescription = article.headline.current(),
+        framed = false,
+        onPhotoClick = if (article.detailEnabled) onClick else null,
+        modifier = Modifier
             .fillMaxSize()
             .background(MaterialTheme.colorScheme.surface)
-            .clickable(onClick = onClick)
     ) {
-        NewsImage(
-            url = article.imageUrl,
-            contentDescription = article.headline.current(),
-            modifier = Modifier.fillMaxSize()
-        )
         Box(
             Modifier
                 .fillMaxSize()
@@ -373,11 +381,9 @@ private fun ImageLeaf(
                 BreakingBadge()
                 Spacer(Modifier.width(8.dp))
             }
-            // Minimum addition for AI Shorts: a badge when a video is attached.
-            val shorts by AIShortRepository.shorts.collectAsState()
-            val hasVideo = remember(shorts, article.id) {
-                AIShortRepository.publishedShortFor(article.id) != null
-            }
+            // A badge when a published AI video (Clips) was made from this story.
+            val clips by com.jvoice.news.data.repository.ClipsRepository.clips.collectAsState()
+            val hasVideo = remember(clips, article.id) { clips.any { it.relatedArticleId == article.id } }
             if (hasVideo) {
                 Surface(
                     shape = RoundedCornerShape(50),
@@ -402,6 +408,31 @@ private fun ImageLeaf(
                         )
                     }
                 }
+            }
+        }
+
+        // Who filed it: a name on the photo, top-right, opposite the badges.
+        // Deliberately just the name - a portrait here competes with the
+        // story's own image, and the initials fallback read as a second story.
+        if (article.reporterName.isNotBlank()) {
+            Surface(
+                shape = RoundedCornerShape(50),
+                color = Color.Black.copy(alpha = 0.45f),
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(14.dp)
+            ) {
+                Text(
+                    article.reporterName,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = Color.White,
+                    fontWeight = FontWeight.SemiBold,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier
+                        .padding(horizontal = 9.dp, vertical = 4.dp)
+                        .widthIn(max = 160.dp)
+                )
             }
         }
 
@@ -460,11 +491,7 @@ private fun StoryLeaf(
     onOpenComments: () -> Unit
 ) {
     val engagementMap by EngagementRepository.engagement.collectAsState()
-    val allComments by EngagementRepository.comments.collectAsState()
     val engagement = engagementMap[article.id] ?: ArticleEngagement(article.id)
-    val commentCount = remember(allComments, article.id) {
-        allComments.count { it.articleId == article.id }
-    }
     var showReport by remember { mutableStateOf(false) }
     val snackbar = LocalReaderSnackbar.current
     val scope = rememberCoroutineScope()
@@ -518,35 +545,40 @@ private fun StoryLeaf(
                 .firstOrNull { it.isNotBlank() && !it.startsWith("(") }
                 .orEmpty()
         }
-        if (excerpt.isNotBlank()) {
-            Spacer(Modifier.height(12.dp))
-            Text(
-                excerpt,
-                style = MaterialTheme.typography.bodyMedium,
-                maxLines = 9,
-                overflow = TextOverflow.Ellipsis
-            )
+
+        // ---------------------------------- the part of the leaf that flexes
+        // The leaf is a fixed height and the reaction bar below must never be
+        // pushed off it, so everything between the description and the bar
+        // lives in this weighted block: it gets whatever is left and no more.
+        // Inside it the excerpt is what gives way - it is measured with the
+        // space that remains after the location line and ellipsises to fit.
+        Column(
+            Modifier
+                .weight(1f)
+                .clipToBounds()
+        ) {
+            Column(Modifier.weight(1f, fill = false)) {
+                if (excerpt.isNotBlank()) {
+                    Spacer(Modifier.height(12.dp))
+                    Text(
+                        excerpt,
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 9,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f, fill = false)
+                    )
+                }
+
+                Spacer(Modifier.height(12.dp))
+                Text(
+                    article.location + "  •  " + article.views.toReadableCount() + " views",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.outline,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
-
-        Spacer(Modifier.height(12.dp))
-        Text(
-            article.location + "  •  " + article.views.toReadableCount() + " views",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.outline,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
-        )
-
-        // ------------------------------------------- who filed this story
-        // Sits in the slack between the excerpt and the swipe hint, so it fills
-        // space that was empty rather than pushing the story text up the page.
-        Spacer(Modifier.weight(1f))
-        ReporterCredit(
-            name = article.reporterName,
-            avatarUrl = article.reporterAvatarUrl,
-            modifier = Modifier.align(Alignment.CenterHorizontally)
-        )
-        Spacer(Modifier.weight(1f))
 
         if (isFirstPage) {
             Row(
@@ -596,86 +628,43 @@ private fun StoryLeaf(
                 activeColor = MaterialTheme.colorScheme.error,
                 onClick = { EngagementRepository.toggleDislike(article.id) }
             )
-            Spacer(Modifier.width(6.dp))
-            ReactionButton(
-                icon = Icons.AutoMirrored.Outlined.Comment,
-                label = if (commentCount == 0) "Comment" else commentCount.toString(),
-                active = false,
-                activeColor = MaterialTheme.colorScheme.primary,
-                onClick = onOpenComments
-            )
+            // No Comment button: comments are off in the Play build until they
+            // can be reported and moderated (Play's user-generated content policy).
             Spacer(Modifier.weight(1f))
-            ReactionButton(
-                icon = Icons.Outlined.Flag,
-                label = "Report",
-                active = false,
-                activeColor = MaterialTheme.colorScheme.error,
+            // Report is a rare action, so it is kept small and out of the way in
+            // the corner rather than weighted like the reactions beside it.
+            ReportButton(
+                modifier = Modifier.align(Alignment.Bottom),
                 onClick = { showReport = true }
             )
         }
     }
 }
 
-/** One pill in the engagement bar. */
 /**
- * The reporter's photo with their name beneath it.
- *
- * Falls back to their initials on a tinted circle when there is no photo, which is
- * the common case today - the desk accounts were seeded without pictures. An empty
- * circle would read as a broken image; initials read as a person.
+ * The Report control in the corner of the story leaf: a small flag and
+ * nothing else. The label lives in the content description for readers who
+ * need it; everyone else gets an unobtrusive corner icon.
  */
 @Composable
-private fun ReporterCredit(
-    name: String,
-    avatarUrl: String,
-    modifier: Modifier = Modifier
-) {
-    if (name.isBlank()) return
-    Column(
-        modifier = modifier.padding(vertical = 8.dp),
-        horizontalAlignment = Alignment.CenterHorizontally
+private fun ReportButton(modifier: Modifier = Modifier, onClick: () -> Unit) {
+    Box(
+        modifier
+            .clip(RoundedCornerShape(50))
+            .clickable(onClick = onClick)
+            // Generous touch target around a small glyph.
+            .padding(8.dp),
+        contentAlignment = Alignment.Center
     ) {
-        Box(
-            Modifier
-                .size(56.dp)
-                .clip(CircleShape)
-                .background(MaterialTheme.colorScheme.primaryContainer),
-            contentAlignment = Alignment.Center
-        ) {
-            if (avatarUrl.isNotBlank()) {
-                AsyncImage(
-                    model = avatarUrl,
-                    contentDescription = name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize()
-                )
-            } else {
-                Text(
-                    reporterInitials(name),
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.Bold,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer
-                )
-            }
-        }
-        Spacer(Modifier.height(6.dp))
-        Text(
-            name,
-            style = MaterialTheme.typography.labelLarge,
-            fontWeight = FontWeight.SemiBold,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis
+        Icon(
+            Icons.Outlined.Flag,
+            contentDescription = "Report this story",
+            tint = MaterialTheme.colorScheme.outline,
+            modifier = Modifier.size(14.dp)
         )
     }
 }
 
-/** First letters of the first two words, e.g. "Kiran Kumar" -> "KK". */
-private fun reporterInitials(name: String): String = name.trim()
-    .split(' ', '\t', '\n')
-    .filter { it.isNotBlank() }
-    .take(2)
-    .map { it.first().uppercaseChar() }
-    .joinToString("")
 
 @Composable
 private fun ReactionButton(

@@ -9,6 +9,8 @@ import com.google.firebase.firestore.Query
 import com.google.firebase.firestore.QuerySnapshot
 import com.jvoice.core.firebase.FirebaseAvailability
 import com.jvoice.core.i18n.LocalizedText
+import kotlinx.coroutines.tasks.await
+import kotlinx.coroutines.withTimeoutOrNull
 
 /**
  * The Firestore handle, the collection names, and the codec helpers every
@@ -43,7 +45,6 @@ object Firestore {
     const val ARTICLES = "articles"
     const val CATEGORIES = "categories"
     const val NEWS_NOTIFICATIONS = "newsNotifications"
-    const val ARTICLE_REPORTS = "articleReports"
 
     // study
     const val SUBJECTS = "subjects"
@@ -161,6 +162,57 @@ object Firestore {
             .addOnFailureListener { Log.e(TAG, "set $collection/$id failed: ${it.message}") }
     }
 
+    /**
+     * A write the caller waits on, for the places a person is told "saved".
+     *
+     * A rules denial or a bad document comes back as a failure with the reason.
+     * With no connection the write stays queued and is sent when the phone is
+     * back online; that is reported as [WriteResult.Queued], not as a failure,
+     * because the story is not lost.
+     */
+    suspend fun setAndWait(collection: String, id: String, data: Map<String, Any?>): WriteResult {
+        val db = db() ?: return WriteResult.Failed("Not connected to J Voice.")
+        return try {
+            val done = withTimeoutOrNull(15_000) {
+                db.collection(collection).document(id).set(data).await()
+                true
+            }
+            if (done == true) WriteResult.Saved else WriteResult.Queued
+        } catch (e: Exception) {
+            Log.e(TAG, "set $collection/$id failed: ${e.message}")
+            WriteResult.Failed(
+                if (e.message?.contains("PERMISSION_DENIED") == true)
+                    "This account is not allowed to save stories. Contact the admin."
+                else e.message ?: "Could not save."
+            )
+        }
+    }
+
+    sealed interface WriteResult {
+        data object Saved : WriteResult
+        data object Queued : WriteResult
+        data class Failed(val message: String) : WriteResult
+    }
+
+    /** [update] that the caller waits on - see [setAndWait] for what each result means. */
+    suspend fun updateAndWait(collection: String, id: String, fields: Map<String, Any?>): WriteResult {
+        val db = db() ?: return WriteResult.Failed("Not connected to J Voice.")
+        return try {
+            val done = withTimeoutOrNull(15_000) {
+                db.collection(collection).document(id).update(fields).await()
+                true
+            }
+            if (done == true) WriteResult.Saved else WriteResult.Queued
+        } catch (e: Exception) {
+            Log.e(TAG, "update $collection/$id failed: ${e.message}")
+            WriteResult.Failed(
+                if (e.message?.contains("PERMISSION_DENIED") == true)
+                    "This account is not allowed to do that. Sign out and in again, or contact the admin."
+                else e.message ?: "Could not save."
+            )
+        }
+    }
+
     /** Partial update. Use for single-field flips so concurrent edits do not clobber. */
     fun update(collection: String, id: String, fields: Map<String, Any?>) {
         val db = db() ?: return
@@ -172,6 +224,33 @@ object Firestore {
         val db = db() ?: return
         db.collection(collection).document(id).delete()
             .addOnFailureListener { Log.e(TAG, "delete $collection/$id failed: ${it.message}") }
+    }
+
+    /**
+     * Deletes a document together with the named subcollections under it.
+     *
+     * Firestore does not cascade: deleting `articles/x` leaves
+     * every document under `articles/x/comments` in place, orphaned and still billed. So the
+     * children are fetched and removed in batches first, and the document
+     * itself goes last - if anything fails part-way the story is still there
+     * to retry against, rather than a headless pile of comments.
+     */
+    fun deleteWithChildren(collection: String, id: String, vararg subcollections: String) {
+        val db = db() ?: return
+        val docRef = db.collection(collection).document(id)
+        val fetches = subcollections.map { docRef.collection(it).get() }
+        com.google.android.gms.tasks.Tasks.whenAllSuccess<com.google.firebase.firestore.QuerySnapshot>(fetches)
+            .addOnSuccessListener { snapshots ->
+                val docs = snapshots.flatMap { it.documents }
+                // A batch holds 500 writes; chunk so a busy story still clears.
+                val batches = docs.chunked(450).map { chunk ->
+                    db.batch().also { b -> chunk.forEach { b.delete(it.reference) } }.commit()
+                }
+                com.google.android.gms.tasks.Tasks.whenAll(batches)
+                    .addOnSuccessListener { docRef.delete() }
+                    .addOnFailureListener { Log.e(TAG, "delete children of $collection/$id failed: ${it.message}") }
+            }
+            .addOnFailureListener { Log.e(TAG, "fetch children of $collection/$id failed: ${it.message}") }
     }
 
     /** A server-generated document id, for creating before writing. */

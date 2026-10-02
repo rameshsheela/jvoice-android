@@ -2,6 +2,20 @@ package com.jvoice.news.utils
 
 import android.content.Context
 import android.content.Intent
+import android.graphics.Bitmap
+import android.graphics.drawable.BitmapDrawable
+import android.net.Uri
+import android.util.Log
+import androidx.core.content.FileProvider
+import coil.imageLoader
+import coil.request.ImageRequest
+import coil.request.SuccessResult
+import java.io.File
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.graphics.Color
 import com.jvoice.news.data.model.NewsArticle
 import com.jvoice.news.data.model.NewsStatus
@@ -61,6 +75,40 @@ fun NewsStatus.color(): Color = when (this) {
  * Shares in the language the reader is reading in, since that is the version
  * they chose to read and presumably the one their contacts read too.
  */
+/** Where a shared story opens for someone without the app. */
+const val WEB_BASE_URL = "https://jvoice-b4b2e.web.app"
+
+/** The published privacy policy; the Play listing points here too. */
+const val PRIVACY_POLICY_URL = "https://jvoicetelugu.com/privacy-policy"
+
+/**
+ * The newsroom's contact page and phone - the same details as the website's
+ * /contact page (J Voice web/src/reader/Contact.jsx). Play's News & Magazines
+ * policy requires them to be easy to find inside the app.
+ */
+const val CONTACT_PAGE_URL = "https://jvoicetelugu.com/contact"
+const val CONTACT_PHONE = "+918919931583"
+const val CONTACT_PHONE_DISPLAY = "+91 89199 31583"
+const val PUBLISHER_ADDRESS = "Lyr Garden Road, beside Bus Stand, Thorrur, Telangana 506163"
+
+/** The app on Google Play. Live once the listing is published. */
+const val PLAY_STORE_URL = "https://play.google.com/store/apps/details?id=com.jvoice.news"
+
+fun articleLink(articleId: String) = "$WEB_BASE_URL/read/$articleId"
+
+/** Off the composition: a share outlives the card that started it. */
+private val shareScope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
+
+/**
+ * Shares a story as its photo with the headline, summary and link as the
+ * caption - the shape WhatsApp and friends render as a picture with text
+ * under it. The photo is taken from Coil's cache (it is already on screen),
+ * staged in the app's cache and handed over through the FileProvider.
+ *
+ * If the photo cannot be had - offline, no image, a decode failure - the
+ * share still goes out as text. The reader tapped Share; something must
+ * appear.
+ */
 fun Context.shareArticle(
     article: NewsArticle,
     language: AppLanguage = LanguagePreference.current
@@ -70,15 +118,52 @@ fun Context.shareArticle(
         append(headline)
         append("\n\n")
         append(article.shortDescription.get(language))
-        append("\n\nvia J Voice (demo content)")
+        append("\n\nRead on J Voice: ")
+        append(articleLink(article.id))
+        append("\nGet the app: ")
+        append(PLAY_STORE_URL)
     }
-    val intent = Intent(Intent.ACTION_SEND).apply {
-        type = "text/plain"
-        putExtra(Intent.EXTRA_SUBJECT, headline)
-        putExtra(Intent.EXTRA_TEXT, text)
+    val context = applicationContext
+    shareScope.launch {
+        val image = if (article.imageUrl.isNotBlank()) context.stageShareImage(article) else null
+        val intent = Intent(Intent.ACTION_SEND).apply {
+            putExtra(Intent.EXTRA_SUBJECT, headline)
+            putExtra(Intent.EXTRA_TEXT, text)
+            if (image != null) {
+                type = "image/jpeg"
+                putExtra(Intent.EXTRA_STREAM, image)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            } else {
+                type = "text/plain"
+            }
+        }
+        context.startActivity(
+            Intent.createChooser(intent, "Share via").addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        )
     }
-    startActivity(Intent.createChooser(intent, "Share via"))
 }
+
+/** Fetches the cover through Coil and writes it to cache/shares; null on any failure. */
+private suspend fun Context.stageShareImage(article: NewsArticle): Uri? =
+    withContext(Dispatchers.IO) {
+        try {
+            val request = ImageRequest.Builder(this@stageShareImage)
+                .data(article.imageUrl)
+                // A hardware bitmap cannot be read back for compression.
+                .allowHardware(false)
+                .build()
+            val result = imageLoader.execute(request) as? SuccessResult ?: return@withContext null
+            val bitmap = (result.drawable as? BitmapDrawable)?.bitmap ?: return@withContext null
+            val dir = File(cacheDir, "shares").apply { mkdirs() }
+            // One file per story; re-sharing overwrites rather than piling up.
+            val file = File(dir, article.id.replace(Regex("[^A-Za-z0-9_-]"), "_") + ".jpg")
+            file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.JPEG, 88, it) }
+            FileProvider.getUriForFile(this@stageShareImage, "$packageName.fileprovider", file)
+        } catch (e: Exception) {
+            Log.w("Share", "image share fell back to text: ${e.message}")
+            null
+        }
+    }
 
 fun String.toTagList(): List<String> =
     split(",", " ")

@@ -5,6 +5,11 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import com.jvoice.aishorts.studio.StudioShorts
 
 /**
  * Short-video clips for the Clips tab.
@@ -14,12 +19,37 @@ import kotlinx.coroutines.flow.update
  */
 object ClipsRepository {
 
-    // Starts empty. Clips come from published stories that carry video; the
-    // seeded list existed only to fill the Clips tab.
+    // Published AI Shorts (Firestore `shorts`, status published) - made in the
+    // studio on the web or in the app, and approved by an editor.
     private val _clips = MutableStateFlow<List<NewsClip>>(emptyList())
     val clips: StateFlow<List<NewsClip>> = _clips.asStateFlow()
 
-    private val _likedIds = MutableStateFlow(setOf("c04"))
+    init {
+        CoroutineScope(SupervisorJob() + Dispatchers.Main).launch {
+            StudioShorts.published().collect { shorts ->
+                val likes = _clips.value.associate { it.id to it.likes }
+                _clips.value = shorts.filter { it.videoUrl.startsWith("http") }.map { s ->
+                    NewsClip(
+                        id = s.id,
+                        title = s.title,
+                        description = s.script.ifBlank { s.content },
+                        categoryId = "",
+                        location = "",
+                        thumbnailUrl = s.posterUrl.ifBlank { s.thumbnailUrl },
+                        videoUrl = s.videoUrl,
+                        durationSeconds = s.durationSeconds,
+                        reporterName = s.reporterName,
+                        publishedAt = s.publishedAt,
+                        views = s.views,
+                        likes = likes[s.id] ?: 0,
+                        relatedArticleId = s.articleId.ifBlank { null }
+                    )
+                }
+            }
+        }
+    }
+
+    private val _likedIds = MutableStateFlow(emptySet<String>())
     val likedIds: StateFlow<Set<String>> = _likedIds.asStateFlow()
 
     private val _savedIds = MutableStateFlow(emptySet<String>())

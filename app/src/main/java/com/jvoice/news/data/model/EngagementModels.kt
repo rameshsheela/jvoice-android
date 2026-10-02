@@ -16,6 +16,10 @@ data class ArticleComment(
     val text: String,
     val timeMillis: Long,
     val likes: Int = 0,
+    /** The comment this one replies to; null for a top-level comment. */
+    val parentId: String? = null,
+    /** The device that posted it - what [isOwn] is judged from. */
+    val deviceId: String = "",
     val isOwn: Boolean = false
 )
 
@@ -23,6 +27,8 @@ data class ArticleEngagement(
     val articleId: String,
     val likes: Int = 0,
     val dislikes: Int = 0,
+    /** Top-level comments and replies together. */
+    val comments: Int = 0,
     val myReaction: Reaction = Reaction.NONE
 )
 

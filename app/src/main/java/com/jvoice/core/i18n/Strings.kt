@@ -46,7 +46,7 @@ object Strings {
             "రిపోర్టర్లు, ఎడిటర్లు, డెస్క్ కోసం. పాఠకులకు ఖాతా అవసరం లేదు."
         )
         val loginId = lt("Login ID", "లాగిన్ ఐడీ")
-        val loginIdHint = lt("your username", "మీ యూజర్నేమ్")
+        val loginIdHint = lt("e.g. jv01r001", "ఉదా. jv01r001")
         val password = lt("Password", "పాస్‌వర్డ్")
         val showPassword = lt("Show password", "పాస్‌వర్డ్ చూపు")
         val hidePassword = lt("Hide password", "పాస్‌వర్డ్ దాచు")
@@ -97,6 +97,14 @@ object Strings {
         val notNow = lt("Not now", "ఇప్పుడు కాదు")
         val continueLabel = lt("Continue", "కొనసాగించు")
         val getStarted = lt("Get started", "ప్రారంభించండి")
+        val aboutYouTitle = lt("Tell us about you", "మీ గురించి చెప్పండి")
+        val aboutYouSubtitle = lt(
+            "Your name appears on your comments. Your location picks the news you see first.",
+            "మీ పేరు మీ కామెంట్లపై కనిపిస్తుంది. మీ ప్రాంతం ప్రకారం వార్తలు ముందుగా చూపిస్తాం."
+        )
+        val yourName = lt("Your name", "మీ పేరు")
+        val namePlaceholder = lt("Optional", "ఐచ్ఛికం")
+        val yourLocation = lt("Your location", "మీ ప్రాంతం")
         val notificationsOn = lt("Notifications are on", "నోటిఫికేషన్‌లు ఆన్‌లో ఉన్నాయి")
         val notificationsOff = lt("Notifications are off", "నోటిఫికేషన్‌లు ఆఫ్‌లో ఉన్నాయి")
         val notificationsHint = lt(

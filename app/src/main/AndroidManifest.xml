@@ -1,13 +1,20 @@
 <?xml version="1.0" encoding="utf-8"?>
-<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Only used by Coil to load dummy demo image URLs. No backend / API calls. -->
+    <!-- News, photos and video from Firebase and jvoicetelugu.com. -->
     <uses-permission android:name="android.permission.INTERNET" />
+    <!--
+      No camera or microphone in the Play build: the AI voice and face set-up
+      lives on the website's studio (see AI_IDENTITY_IN_APP in DeskProfileScreen).
+      tools:node="remove" also keeps any library from merging them back in.
+    -->
+    <uses-permission android:name="android.permission.RECORD_AUDIO" tools:node="remove" />
+    <uses-permission android:name="android.permission.CAMERA" tools:node="remove" />
 
     <!--
-      Asked for once, on first launch, alongside the language choice. Nothing is
-      actually pushed in the prototype - the grant is what the first-run dialogue
-      needs so breaking-news and exam alerts can be wired up later.
+      Asked for once, on first launch, alongside the language choice. Story
+      pushes (see core/push) are refused by the OS without it.
       Runtime request only applies from API 33; below that the grant is implicit.
     -->
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
@@ -20,15 +27,49 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.JVoice">
 
+        <!--
+          configChanges: rotation is handled in place rather than by recreating
+          the activity. Compose relayouts on its own, and the fullscreen video
+          player turns the phone to landscape - a recreation there would drop
+          the player mid-video and bounce the reader straight back out.
+        -->
+        <!--
+          launchMode singleTop: a tap on a story notification while the app is
+          already open is delivered to onNewIntent rather than stacking a second
+          MainActivity over the first.
+        -->
         <activity
             android:name=".MainActivity"
             android:exported="true"
+            android:launchMode="singleTop"
+            android:screenOrientation="portrait"
             android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.JVoice">
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden"
+            android:theme="@style/Theme.JVoice.Starting">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+
+        <!-- FCM: story pushes from the desk's "Send notification" switch. -->
+        <service
+            android:name="com.jvoice.core.push.JVoiceMessagingService"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="com.google.firebase.MESSAGING_EVENT" />
+            </intent-filter>
+        </service>
+
+        <!-- Hands the story photo to the app the reader shares into. -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

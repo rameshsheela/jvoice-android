@@ -1,5 +1,15 @@
 package com.jvoice.news.ui.reader
 
+import android.Manifest
+import android.app.Activity
+import android.content.Context
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
+import android.provider.Settings
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -22,18 +32,27 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.automirrored.filled.Logout
+import androidx.compose.material.icons.automirrored.filled.Login
 import androidx.compose.material.icons.filled.Bookmark
 import androidx.compose.material.icons.filled.Campaign
 import androidx.compose.material.icons.filled.Category
 import androidx.compose.material.icons.filled.CheckCircle
+import androidx.compose.material.icons.filled.Call
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.DarkMode
 import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.DoneAll
+import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Info
+import androidx.compose.material.icons.filled.Language
 import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.NotificationsActive
+import androidx.compose.material.icons.filled.NotificationsOff
+import androidx.compose.material.icons.filled.Person
+import androidx.compose.material.icons.filled.PrivacyTip
 import androidx.compose.material.icons.filled.Translate
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CenterAlignedTopAppBar
@@ -44,6 +63,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
@@ -53,6 +73,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,12 +85,26 @@ import com.jvoice.core.i18n.LanguagePreferenceCard
 import com.jvoice.core.i18n.Strings
 import com.jvoice.core.i18n.tr
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalLifecycleOwner
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
-import coil.compose.AsyncImage
+import androidx.core.app.ActivityCompat
+import androidx.core.content.ContextCompat
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import com.jvoice.core.flags.FeatureFlags
+import com.jvoice.core.flags.flagOptedIn
+import com.jvoice.core.reader.ReaderProfile
+import com.jvoice.news.BuildConfig
+import com.jvoice.news.utils.CONTACT_PAGE_URL
+import com.jvoice.news.utils.CONTACT_PHONE
+import com.jvoice.news.utils.CONTACT_PHONE_DISPLAY
+import com.jvoice.news.utils.PRIVACY_POLICY_URL
+import com.jvoice.news.utils.PUBLISHER_ADDRESS
 import com.jvoice.news.components.ConfirmDialog
 import com.jvoice.news.components.EmptyState
 import com.jvoice.news.components.NewsCard
@@ -223,6 +258,7 @@ fun CategoryNewsScreen(
 fun ReaderSavedScreen(
     viewModel: ReaderViewModel,
     onOpenArticle: (String) -> Unit,
+    onBack: () -> Unit,
     bottomBar: @Composable () -> Unit
 ) {
     val saved by viewModel.savedArticles.collectAsState()
@@ -250,6 +286,11 @@ fun ReaderSavedScreen(
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("Saved • సేవ్ చేసినవి") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 actions = {
                     if (saved.isNotEmpty()) {
                         IconButton(onClick = { confirmClear = true }) {
@@ -302,6 +343,7 @@ fun ReaderSavedScreen(
 fun ReaderNotificationsScreen(
     viewModel: ReaderViewModel,
     onOpenArticle: (String) -> Unit,
+    onBack: () -> Unit,
     bottomBar: @Composable () -> Unit
 ) {
     val notifications by viewModel.notifications.collectAsState()
@@ -310,6 +352,11 @@ fun ReaderNotificationsScreen(
         topBar = {
             CenterAlignedTopAppBar(
                 title = { Text("Notifications") },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                },
                 actions = {
                     if (notifications.any { !it.isRead }) {
                         IconButton(onClick = { viewModel.markAllRead() }) {
@@ -402,35 +449,76 @@ fun ReaderProfileScreen(
     isDarkTheme: Boolean,
     onToggleTheme: (Boolean) -> Unit,
     onSignOut: () -> Unit,
+    onBack: () -> Unit,
     onOpenSaved: () -> Unit = {},
     onOpenCategories: () -> Unit = {},
-    onOpenNotifications: () -> Unit = {},
-    bottomBar: @Composable () -> Unit
+    onOpenNotifications: () -> Unit = {}
 ) {
     val saved by viewModel.savedArticles.collectAsState()
     val location by viewModel.selectedLocation.collectAsState()
     val language by LanguagePreference.language.collectAsState()
-    var confirmSignOut by remember { mutableStateOf(false) }
-    var notificationsOn by remember { mutableStateOf(true) }
+    val name by ReaderProfile.name.collectAsState()
+    val context = LocalContext.current
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
 
-    if (confirmSignOut) {
+    var editingName by remember { mutableStateOf(false) }
+    var pickingLocation by remember { mutableStateOf(false) }
+    var confirmStaffLogin by remember { mutableStateOf(false) }
+    // Hidden until the desk is offered from the public app.
+    val staffLoginOffered = flagOptedIn(FeatureFlags.Keys.STAFF_LOGIN)
+
+    if (editingName) {
+        NameDialog(
+            initial = name,
+            onDismiss = { editingName = false },
+            onSave = { typed ->
+                ReaderProfile.setName(typed)
+                editingName = false
+                scope.launch { snackbarHostState.showSnackbar("Name saved") }
+            }
+        )
+    }
+
+    if (pickingLocation) {
+        LocationDialog(
+            options = viewModel.locations,
+            selected = location,
+            onDismiss = { pickingLocation = false },
+            onPick = { picked ->
+                viewModel.setLocation(picked)
+                pickingLocation = false
+            }
+        )
+    }
+
+    // Signed-in staff reading the news get "Back to my desk" instead of "Staff sign in".
+    val backToDesk = com.jvoice.news.navigation.LocalBackToDesk.current
+
+    if (confirmStaffLogin) {
         ConfirmDialog(
-            title = "Switch role?",
-            message = "You will go back to the dummy role selector.",
-            confirmLabel = "Switch",
+            title = "Staff sign in?",
+            message = "For J Voice reporters, editors and admins. You will leave the reader and go to the sign-in screen.",
+            confirmLabel = "Continue",
             onConfirm = {
-                confirmSignOut = false
+                confirmStaffLogin = false
                 onSignOut()
             },
-            onDismiss = { confirmSignOut = false }
+            onDismiss = { confirmStaffLogin = false }
         )
     }
 
     Scaffold(
-        topBar = { CenterAlignedTopAppBar(title = { Text(tr(Strings.Common.profile)) }) },
-        bottomBar = bottomBar,
+        topBar = {
+            CenterAlignedTopAppBar(
+                title = { Text(tr(Strings.Common.profile)) },
+                navigationIcon = {
+                    IconButton(onClick = onBack) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back")
+                    }
+                }
+            )
+        },
         snackbarHost = { SnackbarHost(snackbarHostState) }
     ) { padding ->
         LazyColumn(
@@ -438,97 +526,64 @@ fun ReaderProfileScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
+            // ------------------------------------------------------ header
+            // The reader's name, or an invitation to add one. Tapping anywhere
+            // on the row edits it.
             item {
                 Row(
                     Modifier
                         .fillMaxWidth()
-                        .padding(20.dp),
+                        .clickable { editingName = true }
+                        .padding(horizontal = 20.dp, vertical = 18.dp),
                     verticalAlignment = Alignment.CenterVertically
                 ) {
-                    AsyncImage(
-                        model = user?.avatarUrl,
-                        contentDescription = null,
-                        modifier = Modifier
-                            .size(64.dp)
+                    Box(
+                        Modifier
+                            .size(56.dp)
                             .clip(RoundedCornerShape(50))
-                    )
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        if (name.isBlank()) {
+                            Icon(
+                                Icons.Default.Person,
+                                contentDescription = null,
+                                tint = MaterialTheme.colorScheme.primary
+                            )
+                        } else {
+                            Text(
+                                name.trim().first().uppercaseChar().toString(),
+                                style = MaterialTheme.typography.titleLarge,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.primary
+                            )
+                        }
+                    }
                     Spacer(Modifier.width(16.dp))
                     Column(Modifier.weight(1f)) {
-                        Text(user?.name ?: "Guest reader", style = MaterialTheme.typography.titleLarge)
                         Text(
-                            user?.email ?: "demo@jvoice.demo",
+                            name.ifBlank { "Add your name" },
+                            style = MaterialTheme.typography.titleLarge,
+                            color = if (name.isBlank()) MaterialTheme.colorScheme.onSurfaceVariant
+                            else MaterialTheme.colorScheme.onSurface
+                        )
+                        Text(
+                            "J Voice reader  •  " + location,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant
                         )
-                        Spacer(Modifier.height(4.dp))
-                        Pill(user?.role?.label ?: "Reader", MaterialTheme.colorScheme.primary)
                     }
+                    Icon(
+                        Icons.Default.Edit,
+                        contentDescription = "Edit name",
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
                 }
+                HorizontalDivider()
             }
 
-            item {
-                Row(
-                    Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    ProfileStat("Saved", saved.size.toString(), Modifier.weight(1f))
-                    ProfileStat("Location", location, Modifier.weight(1f))
-                    ProfileStat("Member", user?.joinedOn ?: "-", Modifier.weight(1f))
-                }
-            }
-
-            item { SectionHeader("My news") }
-            item {
-                ListItem(
-                    leadingContent = { Icon(Icons.Default.Bookmark, contentDescription = null) },
-                    headlineContent = { Text("Saved news") },
-                    supportingContent = { Text(saved.size.toString() + " saved articles") },
-                    modifier = Modifier.clickable(onClick = onOpenSaved)
-                )
-            }
-            item {
-                ListItem(
-                    leadingContent = { Icon(Icons.Default.Category, contentDescription = null) },
-                    headlineContent = { Text("Categories") },
-                    supportingContent = { Text("Browse news by category") },
-                    modifier = Modifier.clickable(onClick = onOpenCategories)
-                )
-            }
-            item {
-                ListItem(
-                    leadingContent = { Icon(Icons.Default.Notifications, contentDescription = null) },
-                    headlineContent = { Text("Notifications") },
-                    supportingContent = { Text("Breaking news alerts") },
-                    modifier = Modifier.clickable(onClick = onOpenNotifications)
-                )
-            }
-
+            // ------------------------------------------------- preferences
             item { SectionHeader("Preferences") }
-            item {
-                ListItem(
-                    leadingContent = { Icon(Icons.Default.DarkMode, contentDescription = null) },
-                    headlineContent = { Text("Dark mode") },
-                    supportingContent = { Text("Follows the system unless changed here") },
-                    trailingContent = {
-                        Switch(checked = isDarkTheme, onCheckedChange = onToggleTheme)
-                    }
-                )
-            }
-            item {
-                ListItem(
-                    leadingContent = { Icon(Icons.Default.Notifications, contentDescription = null) },
-                    headlineContent = { Text("Push alerts") },
-                    supportingContent = { Text("Local demo toggle only") },
-                    trailingContent = {
-                        Switch(checked = notificationsOn, onCheckedChange = { notificationsOn = it })
-                    }
-                )
-            }
-            // The reader's language lives here. This replaced a cosmetic
-            // "Telugu first" switch that nothing read - the choice now drives
-            // every headline, body, study page and question in both modules.
             item {
                 LanguagePreferenceCard(
                     selected = language,
@@ -545,63 +600,347 @@ fun ReaderProfileScreen(
             item {
                 ListItem(
                     leadingContent = { Icon(Icons.Default.LocationOn, contentDescription = null) },
-                    headlineContent = { Text("Preferred location") },
-                    supportingContent = { Text(location) }
+                    headlineContent = { Text("Location") },
+                    supportingContent = { Text(location) },
+                    trailingContent = {
+                        Icon(Icons.Default.ChevronRight, contentDescription = null)
+                    },
+                    modifier = Modifier.clickable { pickingLocation = true }
                 )
             }
-
-            item { SectionHeader("About") }
+            item { NotificationPermissionRow() }
             item {
                 ListItem(
-                    leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
-                    headlineContent = { Text("J Voice — Module 1 prototype") },
-                    supportingContent = {
-                        Text("Version 1.0 • All content is dummy demo data. No backend or Firebase.")
+                    leadingContent = { Icon(Icons.Default.DarkMode, contentDescription = null) },
+                    headlineContent = { Text("Dark mode") },
+                    supportingContent = { Text("Follows the system unless changed here") },
+                    trailingContent = {
+                        Switch(checked = isDarkTheme, onCheckedChange = onToggleTheme)
                     }
                 )
             }
 
+            // ----------------------------------------------------- my news
+            item { SectionHeader("My news") }
             item {
-                OutlinedButton(
-                    onClick = { confirmSignOut = true },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(20.dp)
-                ) {
-                    Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null)
-                    Spacer(Modifier.width(8.dp))
-                    Text("Switch role")
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.Bookmark, contentDescription = null) },
+                    headlineContent = { Text("Saved news") },
+                    supportingContent = { Text(saved.size.toString() + " saved articles") },
+                    modifier = Modifier.clickable(onClick = onOpenSaved)
+                )
+            }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.Notifications, contentDescription = null) },
+                    headlineContent = { Text("Notifications") },
+                    supportingContent = { Text("Breaking news alerts") },
+                    modifier = Modifier.clickable(onClick = onOpenNotifications)
+                )
+            }
+
+            // ------------------------------------------------- invited by
+            // An APK install carries no Play referrer, so the reader can say
+            // once which reporter sent them - it earns that reporter points.
+            item { InvitedByRow() }
+
+            // ------------------------------------------------------- about
+            item { SectionHeader("About") }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.Info, contentDescription = null) },
+                    headlineContent = { Text("J Voice") },
+                    supportingContent = {
+                        Text("Telugu news published by J Voice, $PUBLISHER_ADDRESS  •  Version " + BuildConfig.VERSION_NAME)
+                    }
+                )
+            }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.Call, contentDescription = null) },
+                    headlineContent = { Text("Contact us") },
+                    supportingContent = { Text("Call the newsroom: $CONTACT_PHONE_DISPLAY") },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_DIAL, android.net.Uri.parse("tel:$CONTACT_PHONE"))
+                            )
+                        }
+                    }
+                )
+            }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.Language, contentDescription = null) },
+                    headlineContent = { Text("Contact page") },
+                    supportingContent = { Text(CONTACT_PAGE_URL.removePrefix("https://")) },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(CONTACT_PAGE_URL))
+                            )
+                        }
+                    }
+                )
+            }
+            item {
+                ListItem(
+                    leadingContent = { Icon(Icons.Default.PrivacyTip, contentDescription = null) },
+                    headlineContent = { Text("Privacy policy") },
+                    supportingContent = { Text("How J Voice handles your information") },
+                    trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+                    modifier = Modifier.clickable {
+                        runCatching {
+                            context.startActivity(
+                                Intent(Intent.ACTION_VIEW, android.net.Uri.parse(PRIVACY_POLICY_URL))
+                            )
+                        }
+                    }
+                )
+            }
+
+            if (backToDesk != null) {
+                // Signed-in staff reading the news: back to their desk, not a
+                // "sign in" that would sign them out.
+                item {
+                    androidx.compose.material3.Button(
+                        onClick = backToDesk,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Back to my desk")
+                    }
+                }
+            } else if (staffLoginOffered) {
+                item {
+                    OutlinedButton(
+                        onClick = { confirmStaffLogin = true },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(20.dp)
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null)
+                        Spacer(Modifier.width(8.dp))
+                        Text("Staff sign in")
+                    }
                 }
             }
+            item { Spacer(Modifier.height(24.dp)) }
         }
     }
 }
 
+/** Edit the reader's display name. */
 @Composable
-private fun ProfileStat(label: String, value: String, modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
-        colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.surfaceVariant)
-    ) {
-        Column(
-            Modifier
-                .fillMaxWidth()
-                .padding(12.dp),
-            horizontalAlignment = Alignment.CenterHorizontally
-        ) {
-            Text(
-                value,
-                style = MaterialTheme.typography.titleMedium,
-                textAlign = TextAlign.Center,
-                maxLines = 1
+private fun NameDialog(
+    initial: String,
+    onDismiss: () -> Unit,
+    onSave: (String) -> Unit
+) {
+    var text by remember { mutableStateOf(initial) }
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Your name") },
+        text = {
+            OutlinedTextField(
+                value = text,
+                onValueChange = { if (it.length <= ReaderProfile.MAX_NAME_LENGTH) text = it },
+                singleLine = true,
+                label = { Text("Name") },
+                placeholder = { Text("e.g. Sai Charan") },
+                modifier = Modifier.fillMaxWidth()
             )
-            Text(
-                label,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-            )
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(text) },
+                enabled = text.isNotBlank()
+            ) { Text("Save") }
+        },
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/** Pick the reader's location from the bureau list. */
+@Composable
+private fun LocationDialog(
+    options: List<String>,
+    selected: String,
+    onDismiss: () -> Unit,
+    onPick: (String) -> Unit
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("Your location") },
+        text = {
+            LazyColumn {
+                items(options) { option ->
+                    ListItem(
+                        headlineContent = { Text(option) },
+                        trailingContent = {
+                            if (option == selected) {
+                                Icon(
+                                    Icons.Default.CheckCircle,
+                                    contentDescription = "Selected",
+                                    tint = MaterialTheme.colorScheme.primary
+                                )
+                            }
+                        },
+                        modifier = Modifier.clickable { onPick(option) }
+                    )
+                }
+            }
+        },
+        confirmButton = {},
+        dismissButton = { TextButton(onClick = onDismiss) { Text("Cancel") } }
+    )
+}
+
+/**
+ * The notification permission, with the OS state and a way to grant it.
+ *
+ * Below API 33 the permission is granted at install, so the row simply reports
+ * that. From 33 a tap asks; if the system will no longer show the prompt (the
+ * reader has said no twice) the tap opens the app's notification settings
+ * instead, which is the only remaining way to turn them on.
+ */
+@Composable
+private fun NotificationPermissionRow() {
+    val context = LocalContext.current
+    val lifecycleOwner = LocalLifecycleOwner.current
+
+    fun granted(): Boolean =
+        Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) ==
+            PackageManager.PERMISSION_GRANTED
+
+    var isGranted by remember { mutableStateOf(granted()) }
+
+    // Re-read on return from the system settings page.
+    DisposableEffect(lifecycleOwner) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) isGranted = granted()
         }
+        lifecycleOwner.lifecycle.addObserver(observer)
+        onDispose { lifecycleOwner.lifecycle.removeObserver(observer) }
+    }
+
+    val launcher = rememberLauncherForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { result ->
+        isGranted = result
+        LanguagePreference.markNotificationsAsked()
+        val activity = context as? Activity
+        if (!result && activity != null &&
+            Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU &&
+            !ActivityCompat.shouldShowRequestPermissionRationale(
+                activity, Manifest.permission.POST_NOTIFICATIONS
+            )
+        ) {
+            openNotificationSettings(context)
+        }
+    }
+
+    ListItem(
+        leadingContent = {
+            Icon(
+                if (isGranted) Icons.Default.NotificationsActive else Icons.Default.NotificationsOff,
+                contentDescription = null
+            )
+        },
+        headlineContent = { Text("Notification permission") },
+        supportingContent = {
+            Text(if (isGranted) "Allowed - breaking news alerts are on" else "Not allowed yet")
+        },
+        trailingContent = {
+            if (!isGranted) {
+                TextButton(onClick = {
+                    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                        launcher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                    }
+                }) { Text("Allow") }
+            }
+        },
+        modifier = if (isGranted) Modifier else Modifier.clickable {
+            openNotificationSettings(context)
+        }
+    )
+}
+
+private fun openNotificationSettings(context: Context) {
+    val intent = Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
+        .putExtra(Settings.EXTRA_APP_PACKAGE, context.packageName)
+        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    try {
+        context.startActivity(intent)
+    } catch (e: Exception) {
+        // No settings screen to hand off to: nothing more can be done here.
+    }
+}
+
+/** "Invited by a J Voice reporter?" - one code, once per phone. */
+@Composable
+private fun InvitedByRow() {
+    val creditedTo by com.jvoice.core.data.InstallReferral.creditedTo.collectAsState()
+    var open by remember { mutableStateOf(false) }
+    var code by remember { mutableStateOf("") }
+    var error by remember { mutableStateOf<String?>(null) }
+    var busy by remember { mutableStateOf(false) }
+    val scope = rememberCoroutineScope()
+
+    if (creditedTo != null) {
+        ListItem(
+            leadingContent = { Icon(Icons.Default.Person, contentDescription = null) },
+            headlineContent = { Text("Invited by") },
+            supportingContent = { Text(creditedTo!!.ifBlank { "A J Voice reporter" }) }
+        )
+        return
+    }
+    ListItem(
+        leadingContent = { Icon(Icons.Default.Person, contentDescription = null) },
+        headlineContent = { Text("Invited by a J Voice reporter?") },
+        supportingContent = { Text("Enter their code - it thanks them for bringing you") },
+        trailingContent = { Icon(Icons.Default.ChevronRight, contentDescription = null) },
+        modifier = Modifier.clickable { open = true }
+    )
+    if (open) {
+        androidx.compose.material3.AlertDialog(
+            onDismissRequest = { if (!busy) open = false },
+            title = { Text("Reporter's code") },
+            text = {
+                Column {
+                    androidx.compose.material3.OutlinedTextField(
+                        value = code,
+                        onValueChange = { code = it; error = null },
+                        placeholder = { Text("e.g. jv01r001") },
+                        singleLine = true,
+                        isError = error != null,
+                        supportingText = error?.let { { Text(it) } }
+                    )
+                }
+            },
+            confirmButton = {
+                androidx.compose.material3.TextButton(
+                    enabled = !busy && code.isNotBlank(),
+                    onClick = {
+                        busy = true
+                        scope.launch {
+                            com.jvoice.core.data.InstallReferral.claim(code)
+                                .onSuccess { open = false }
+                                .onFailure { error = it.message }
+                            busy = false
+                        }
+                    }
+                ) { Text(if (busy) "Saving…" else "Save") }
+            },
+            dismissButton = {
+                androidx.compose.material3.TextButton(enabled = !busy, onClick = { open = false }) { Text("Cancel") }
+            }
+        )
     }
 }

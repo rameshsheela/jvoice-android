@@ -18,7 +18,7 @@ package com.jvoice.core.auth
  * ```
  * users/{uid}
  *   uid            string    mirrors the key, so a record read alone still knows itself
- *   loginId        string    the bare username, without @jvoicenews.com
+ *   loginId        string    the bare login id (also the employee id), e.g. jv01r001 - without @jvoicetelugu.com
  *   name           string    display name
  *   email          string    the expanded address actually used to authenticate
  *   phone          string    for the password-reset callback queue
@@ -38,6 +38,7 @@ data class JvUser(
     var email: String? = null,
     var phone: String? = null,
     var role: String? = null,
+    var avatarUrl: String? = null,
     var isLogin: Any? = null,
     var forceLogoutAt: Long? = null,
     var createdAt: Long? = null,
