@@ -82,7 +82,7 @@ import com.jvoice.news.components.ReportSheet
 import com.jvoice.news.components.LoadingState
 import com.jvoice.news.components.VideoOrPhoto
 import com.jvoice.news.components.NewsImage
-import com.jvoice.news.components.VerticalTwoPanelFlip
+import com.jvoice.news.components.VerticalCardPager
 import com.jvoice.news.data.model.ArticleEngagement
 import com.jvoice.news.data.model.NewsArticle
 import com.jvoice.news.data.model.Reaction
@@ -134,17 +134,25 @@ fun NewsFlipScreen(
     // Within each half the chosen category leads and the rest of the news
     // follows, so a category with a single story still swipes on.
     //
-    // Rebuilt only when the stories or the filter change - deliberately not
-    // when the read set changes, so marking the current card as read cannot
-    // pull it out from under the swipe.
-    val cards = remember(allClips, categoryFilter) {
+    // The order is rebuilt only when the set of stories or the filter
+    // changes - deliberately not when the read set changes, and not when a
+    // story's counts change. Marking the current card read also bumps its
+    // view count, so keying on the articles themselves re-sorted the deck on
+    // every swipe and sent the reader's card to the read half at the end.
+    val storyIds = allClips.map { it.id }
+    val deckIds = remember(storyIds, categoryFilter) {
         val alreadyRead = ReadStateRepository.readIds.value
         fun order(list: List<NewsArticle>) =
             if (categoryFilter == null) list
             else list.filter { it.categoryId == categoryFilter } +
                 list.filterNot { it.categoryId == categoryFilter }
-        order(allClips.filterNot { alreadyRead.contains(it.id) }) +
-            order(allClips.filter { alreadyRead.contains(it.id) })
+        (order(allClips.filterNot { alreadyRead.contains(it.id) }) +
+            order(allClips.filter { alreadyRead.contains(it.id) })).map { it.id }
+    }
+    // The cards themselves always carry the latest copy of each story.
+    val cards = remember(deckIds, allClips) {
+        val byId = allClips.associateBy { it.id }
+        deckIds.mapNotNull(byId::get)
     }
 
     // The story on screen. A story counts as read when its card comes to rest
@@ -291,13 +299,13 @@ fun NewsFlipScreen(
                 .fillMaxSize()
                 .padding(padding)
         ) {
-            // Two hinged leaves - the image and the story turn as separate sheets.
-            // See components/VerticalPageFlip.kt
-            VerticalTwoPanelFlip(
+            // One card per story - photo over text - sliding up as a unit.
+            // See components/VerticalCardPager.kt
+            VerticalCardPager(
                 count = cards.size,
                 modifier = Modifier.fillMaxSize(),
                 topFraction = 0.36f,
-                resetKey = cards,
+                resetKey = deckIds,
                 pageOnReset = pageOnReset,
                 onPageSettled = { index ->
                     cards.getOrNull(index)?.let(::onCardShown)
@@ -596,7 +604,7 @@ private fun StoryLeaf(
                 )
                 Spacer(Modifier.width(4.dp))
                 Text(
-                    "Swipe to turn the page  •  tap the photo to read",
+                    "Swipe up for the next story  •  tap the photo to read",
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.outline
                 )
