@@ -35,6 +35,7 @@ import com.jvoice.core.firebase.FirebaseAvailability
 import com.jvoice.core.i18n.FirstRunLanguageDialog
 import com.jvoice.core.i18n.LanguagePreference
 import com.jvoice.core.flags.FeatureFlags
+import com.jvoice.core.flags.ReleaseConfig
 import com.jvoice.core.flags.LocalFeatureFlags
 import com.jvoice.core.i18n.LocalAppLanguage
 import com.jvoice.core.push.NewsPush
@@ -180,7 +181,21 @@ fun JVoiceApp() {
                 // Editors and news admins get the review alarm while signed in here;
                 // anyone else (or nobody) leaves it.
                 LaunchedEffect(deskSession?.uid, deskSession?.role) {
-                    NewsPush.syncReviewAlerts(appContext, deskSession?.role)
+                    NewsPush.syncReviewAlerts(
+                        appContext,
+                        if (ReleaseConfig.READER_ONLY) null else deskSession?.role
+                    )
+                }
+
+                // The Play build has no desk: a desk session left over from an
+                // earlier install is ended, and the phone reads as a reader.
+                if (ReleaseConfig.READER_ONLY) {
+                    LaunchedEffect(deskSession?.uid) {
+                        if (deskSession != null) {
+                            AuthGate.logout()
+                            NewsRepository.onSessionChanged()
+                        }
+                    }
                 }
 
                 // The staff login is reached from the reader's Profile tab, and Back
@@ -278,7 +293,8 @@ fun JVoiceApp() {
                 when {
                     // A stored desk session that has not yet cleared the launch gate.
                     // Nothing else renders until the two server checks answer.
-                    session != null && gatedUid != session.uid &&
+                    !ReleaseConfig.READER_ONLY &&
+                        session != null && gatedUid != session.uid &&
                         newsUser == null && studyUser == null -> {
                         DeskSessionGate(
                             session = session,
@@ -321,7 +337,7 @@ fun JVoiceApp() {
                         }
                     }
 
-                    studyUser != null -> {
+                    !ReleaseConfig.READER_ONLY && studyUser != null -> {
                         val navController = rememberNavController()
                         CompositionLocalProvider(
                             LocalModuleSwitcher provides switcherFor(AppModule.STUDY)
@@ -336,7 +352,7 @@ fun JVoiceApp() {
                         }
                     }
 
-                    showStaffLogin -> {
+                    !ReleaseConfig.READER_ONLY && showStaffLogin -> {
                         BackHandler { showStaffLogin = false }
                         StaffLoginScreen(
                             onSignedIn = { signedIn ->

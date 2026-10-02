@@ -97,6 +97,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import com.jvoice.core.flags.FeatureFlags
+import com.jvoice.core.flags.ReleaseConfig
 import com.jvoice.core.flags.flagOptedIn
 import com.jvoice.core.reader.ReaderProfile
 import com.jvoice.news.BuildConfig
@@ -466,7 +467,8 @@ fun ReaderProfileScreen(
     var pickingLocation by remember { mutableStateOf(false) }
     var confirmStaffLogin by remember { mutableStateOf(false) }
     // Hidden until the desk is offered from the public app.
-    val staffLoginOffered = flagOptedIn(FeatureFlags.Keys.STAFF_LOGIN)
+    // Never in the Play build, whatever the server flag says - see ReleaseConfig.
+    val staffLoginOffered = !ReleaseConfig.READER_ONLY && flagOptedIn(FeatureFlags.Keys.STAFF_LOGIN)
 
     if (editingName) {
         NameDialog(

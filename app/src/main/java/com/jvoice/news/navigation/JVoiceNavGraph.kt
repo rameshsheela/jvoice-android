@@ -13,6 +13,7 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.navArgument
 import com.jvoice.core.flags.FeatureFlags
 import com.jvoice.core.flags.FlaggedRoute
+import com.jvoice.core.flags.ReleaseConfig
 import com.jvoice.news.data.model.User
 import com.jvoice.study.data.mock.MockDataSource
 import com.jvoice.study.data.model.StudyRole
@@ -88,6 +89,8 @@ fun JVoiceNavGraph(
         )
     ) {
     NavHost(navController = navController, startDestination = startDestination) {
+        // Play build: the reader graph only - see ReleaseConfig.
+        if (!ReleaseConfig.READER_ONLY) {
         // AI Shorts on the studio backend (aishorts/studio).
         composable(com.jvoice.aishorts.studio.StudioRoutes.MINE) {
             com.jvoice.aishorts.studio.MyAiVideosScreen(
@@ -132,7 +135,9 @@ fun JVoiceNavGraph(
                 onSignOut = onSignOut
             )
         }
+        }
         readerGraph(navController, user, isDarkTheme, onToggleTheme, onSignOut)
+        if (!ReleaseConfig.READER_ONLY) {
         // Module 2's Student screens, hosted inside the News NavHost. They keep
         // their own bottom bar — News, Home, Study, Exams, Ranks, Profile — so the
         // module stays navigable after crossing over from News.
@@ -153,6 +158,7 @@ fun JVoiceNavGraph(
         editorGraph(navController, onSignOut)
         adminGraph(navController, onSignOut)
         superAdminGraph(navController, onSignOut)
+        }
     }
     }
 }
@@ -222,7 +228,7 @@ private fun NavGraphBuilder.readerGraph(
     // closes the entrance - see FlaggedRoute. The redirect pops Clips itself
     // rather than switching tabs, so Back does not walk straight back into a
     // flow that is turned off.
-    composable(Routes.READER_CLIPS) {
+    if (!ReleaseConfig.READER_ONLY) composable(Routes.READER_CLIPS) {
         FlaggedRoute(
             key = FeatureFlags.Keys.SHORTS_TAB,
             optIn = true,
@@ -288,7 +294,8 @@ private fun NavGraphBuilder.readerGraph(
         )
     }
 
-    composable(
+    // No comments in the Play build until they can be reported and moderated.
+    if (!ReleaseConfig.READER_ONLY) composable(
         route = Routes.READER_COMMENTS,
         arguments = listOf(navArgument(Routes.ARG_ARTICLE_ID) { type = NavType.StringType })
     ) { entry ->

@@ -20,6 +20,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import coil.compose.AsyncImage
 import com.jvoice.core.flags.FeatureFlags
+import com.jvoice.core.flags.ReleaseConfig
 import com.jvoice.core.flags.flagEnabled
 import com.jvoice.core.flags.flagOptedIn
 import androidx.compose.material.icons.Icons
@@ -383,7 +384,8 @@ private fun ImageLeaf(
             }
             // A badge when a published AI video (Clips) was made from this story.
             val clips by com.jvoice.news.data.repository.ClipsRepository.clips.collectAsState()
-            val hasVideo = remember(clips, article.id) { clips.any { it.relatedArticleId == article.id } }
+            val hasVideo = !ReleaseConfig.READER_ONLY &&
+                remember(clips, article.id) { clips.any { it.relatedArticleId == article.id } }
             if (hasVideo) {
                 Surface(
                     shape = RoundedCornerShape(50),

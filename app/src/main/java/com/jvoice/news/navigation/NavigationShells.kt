@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.RoundedCornerShape
 import com.jvoice.core.flags.FeatureFlags
+import com.jvoice.core.flags.ReleaseConfig
 import com.jvoice.core.flags.flagOptedIn
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Article
@@ -103,10 +104,10 @@ fun ReaderBottomBar(
     // so the pill lays out for the tabs it has, not around gaps.
     val items = buildList {
         add(NavItem(Routes.READER_HOME, "News", Icons.Default.Home))
-        if (flagOptedIn(FeatureFlags.Keys.SHORTS_TAB)) {
+        if (!ReleaseConfig.READER_ONLY && flagOptedIn(FeatureFlags.Keys.SHORTS_TAB)) {
             add(NavItem(Routes.READER_CLIPS, "Clips", Icons.Default.Bolt))
         }
-        if (flagOptedIn(FeatureFlags.Keys.STUDY_TAB)) {
+        if (!ReleaseConfig.READER_ONLY && flagOptedIn(FeatureFlags.Keys.STUDY_TAB)) {
             add(NavItem(StudyRoutes.HOME, "Study", Icons.Default.School))
         }
     }
