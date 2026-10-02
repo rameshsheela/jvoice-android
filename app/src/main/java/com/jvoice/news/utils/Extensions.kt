@@ -89,6 +89,7 @@ const val PRIVACY_POLICY_URL = "https://jvoicetelugu.com/privacy-policy"
 const val CONTACT_PAGE_URL = "https://jvoicetelugu.com/contact"
 const val CONTACT_PHONE = "+918919931583"
 const val CONTACT_PHONE_DISPLAY = "+91 89199 31583"
+const val CONTACT_EMAIL = "jvtelugu99@gmail.com"
 const val PUBLISHER_ADDRESS = "Lyr Garden Road, beside Bus Stand, Thorrur, Telangana 506163"
 
 /** The app on Google Play. Live once the listing is published. */
